@@ -1,0 +1,11 @@
+Logs/
+*.log
+*.clixml
+*.tmp
+*.iso
+*.vdi
+*.sav
+*.zip
+bin/
+obj/
+.vs/
