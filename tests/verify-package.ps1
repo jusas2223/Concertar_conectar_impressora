@@ -14,7 +14,12 @@ $scripts = @(
 
 if (-not (Test-Path -LiteralPath $exePath)) { throw 'Compile o EXE antes deste teste.' }
 $assembly = [Reflection.Assembly]::LoadFile($exePath)
-if ($assembly.GetName().Version.ToString() -ne '1.9.2.0') { throw 'Versao do EXE incorreta.' }
+if ($assembly.GetName().Version.ToString() -ne '1.9.5.0') { throw 'Versao do EXE incorreta.' }
+$launcherType = $assembly.GetType('AssistenteImpressorasLauncher.Program', $true)
+$quoteMethod = $launcherType.GetMethod('Quote', [Reflection.BindingFlags]'NonPublic,Static')
+if (-not $quoteMethod -or $quoteMethod.Invoke($null, @('T:\')) -cne '"T:\\"') {
+    throw 'O iniciador não preserva a barra final da unidade compartilhada.'
+}
 
 foreach ($entry in $scripts) {
     $resource = $assembly.GetManifestResourceStream($entry.Resource)

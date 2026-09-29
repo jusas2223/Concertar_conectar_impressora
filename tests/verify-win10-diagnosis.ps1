@@ -22,6 +22,7 @@ function Test-TcpPortSafe {
     param($HostOrIp, $Port, $TimeoutMs)
     return ($HostOrIp -eq '10.0.0.24' -and $Port -in @(135,445))
 }
+function Test-IsAdmin { return $false }
 $diagnosis = Get-SharedPrinterAccessDiagnosis -UNCPath '\\SERVIDOR\Fila' -AlternateHost '10.0.0.24'
 if (-not $diagnosis.Valid -or -not $diagnosis.SMBReachable -or
     $diagnosis.SuggestedHost -ne '10.0.0.24' -or $diagnosis.Message -notlike '*RPC 135 aberta*') {

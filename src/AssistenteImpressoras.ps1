@@ -10,6 +10,7 @@
 
 param(
     [string]$AppDirectory = "",
+    [string]$LauncherPath = "",
     [string]$PrinterFixPath = "",
     [string]$NetworkFixPath = "",
     [string]$LocalPortInstallPath = "",
@@ -170,6 +171,36 @@ public static class PrinterNetworkAuth {
     }
 }
 
+function Initialize-PrinterNetOnlyProcess {
+    if ('PrinterNetOnlyProcess' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PrinterNetOnlyProcess {
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    public struct STARTUPINFO {
+        public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+        public int dwX; public int dwY; public int dwXSize; public int dwYSize;
+        public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute;
+        public int dwFlags; public short wShowWindow; public short cbReserved2;
+        public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION {
+        public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId;
+    }
+    [DllImport("advapi32.dll", EntryPoint="CreateProcessWithLogonW", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern bool Create(string user, string domain, string password, int logonFlags,
+        string application, string commandLine, int creationFlags, IntPtr environment,
+        string directory, ref STARTUPINFO startup, out PROCESS_INFORMATION process);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetExitCodeProcess(IntPtr handle, out uint exitCode);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool TerminateProcess(IntPtr handle, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr handle);
+}
+'@ -ErrorAction Stop
+}
+
 # Teste de Socket TCP com timeout rígido (evita congelamento da UI)
 function Test-TcpPortSafe {
     param(
@@ -268,17 +299,59 @@ function Get-SharedPrinterAccessDiagnosis {
     $detail = @($checks | ForEach-Object {
         '{0}: SMB 445 {1}; RPC 135 {2}' -f $_.Host,$(if ($_.SMB) {'aberta'} else {'fechada'}),$(if ($_.RPC) {'aberta'} else {'fechada'})
     }) -join "`n"
+    $queueStatus = 'não consultada'
+    $driverName = ''
+    $localDriverAvailable = $false
+    $remoteJob = $null
+    if ($usable -and $usable.RPC -and (Get-Command Get-Printer -ErrorAction SilentlyContinue)) {
+        try {
+            $remoteJob = Start-Job -ArgumentList $server,$share -ScriptBlock {
+                param($computer,$queueShare)
+                try {
+                    $printer = Get-Printer -ComputerName $computer -ErrorAction Stop |
+                        Where-Object { $_.ShareName -ieq $queueShare } | Select-Object -First 1
+                    if ($printer) {
+                        @{ Status='acessível'; DriverName=[string]$printer.DriverName }
+                    } else {
+                        @{ Status='não encontrada'; DriverName='' }
+                    }
+                } catch {
+                    $accessDenied = [string]$_.Exception.Message -match 'acesso.*negado|access.*denied|0x80070005'
+                    @{ Status=$(if ($accessDenied) { 'acesso negado' } else { 'consulta falhou' }); DriverName=''; Error=[string]$_.Exception.Message }
+                }
+            }
+            if (Wait-Job -Job $remoteJob -Timeout 6) {
+                $remote = Receive-Job -Job $remoteJob -ErrorAction Stop | Select-Object -First 1
+                $queueStatus = [string]$remote.Status
+                $driverName = [string]$remote.DriverName
+                if ($driverName) {
+                    $localDriverAvailable = @(Get-InstalledDriversSafe | Where-Object { $_ -ieq $driverName }).Count -gt 0
+                }
+            } else {
+                Stop-Job -Job $remoteJob -ErrorAction SilentlyContinue
+                $queueStatus = 'consulta excedeu 6 segundos'
+            }
+        } catch { $queueStatus = 'consulta falhou' }
+        finally { if ($remoteJob) { Remove-Job -Job $remoteJob -Force -ErrorAction SilentlyContinue } }
+    }
     $nextStep = if (-not $usable) {
         'O compartilhamento não responde em SMB 445. Confira rede, firewall e nome/IP antes de instalar.'
     } elseif (-not $usable.RPC) {
         'SMB responde, mas RPC 135 não. A instalação automática pode falhar; verifique o RPC no servidor. A porta local pode funcionar se o driver estiver instalado neste PC.'
+    } elseif ($queueStatus -eq 'acesso negado') {
+        'A consulta de gerenciamento remoto foi negada. Isso não comprova falta de permissão para imprimir. Confira autenticação, driver e privilégio de administrador na instalação.'
+    } elseif ($driverName -and -not $localDriverAvailable) {
+        "O driver '$driverName' não está instalado neste cliente. Use um pacote compatível do fabricante e execute a instalação como administrador antes de tentar novamente."
     } else {
-        'A rede responde. Se a conexão normal falha, confira o driver neste PC e tente instalar uma fila por porta local.'
+        'A rede responde. Se a conexão normal falha, tente a porta local com o driver correto instalado e autenticação válida no servidor.'
     }
+    $adminLine = if (Test-IsAdmin) { 'sim' } else { 'não; a instalação de driver remoto geralmente exige elevação' }
+    $driverLine = if ($driverName) { "$driverName (instalado neste cliente: $(if ($localDriverAvailable) {'sim'} else {'não'}))" } else { 'não identificado nesta consulta' }
     return @{
         Valid=$true; Server=$server; Share=$share; SMBReachable=[bool]$usable
-        SuggestedHost=$(if ($usable) { [string]$usable.Host } else { '' })
-        Message="Caminho: $UNCPath`n$detail`n`n$nextStep"
+        SuggestedHost=$(if ($usable) { [string]$usable.Host } else { '' }); RemoteQueueStatus=$queueStatus
+        DriverName=$driverName; LocalDriverAvailable=$localDriverAvailable
+        Message="Caminho: $UNCPath`n$detail`nConsulta remota da fila: $queueStatus`nDriver da fila: $driverLine`nAdministrador neste PC: $adminLine`n`n$nextStep"
     }
 }
 
@@ -408,22 +481,6 @@ function Install-RemotePrinterDriverFromPrintShare {
         Write-AppLog -Message "[SIMULAÇÃO] O driver da impressora '$ShareName' seria verificado no servidor $cleanServer; nenhuma política, pacote ou driver será alterado." -Level "SIMULACAO"
         return @{ Success = $true; Simulated = $true; Count = 0; Message = "Instalação simulada." }
     }
-
-    # 1. Configurar Bypass de PointAndPrint e RPC (Corrige erros 0x0000011b e 0x0000007c)
-    try {
-        if (-not (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Control\Print")) {
-            New-Item -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Print" -Force | Out-Null
-        }
-        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Print" -Name "RpcAuthnLevelPrivacyEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-
-        $papPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint"
-        if (-not (Test-Path $papPath)) {
-            New-Item -Path $papPath -Force | Out-Null
-        }
-        Set-ItemProperty -Path $papPath -Name "RestrictDriverInstallationToAdministrators" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path $papPath -Name "PointAndPrintNoWarningNoElevationOnInstall" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path $papPath -Name "UpdatePromptSettings" -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
-    } catch {}
 
     # 2. Teste rapido de conectividade SMB na porta 445 (timeout 400ms para evitar travamento)
     $tcpOk = Test-TcpPortSafe -HostOrIp $cleanServer -Port 445 -TimeoutMs 400
@@ -748,8 +805,6 @@ function Show-LocalPortFallbackDialog {
     foreach ($driverName in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$driverName) }
     if ($SuggestedDriverName) {
         $cmbDriver.Text = $SuggestedDriverName
-    } elseif ($share -ieq 'MP' -and $cmbDriver.Items.Contains('MP-4200 TH')) {
-        $cmbDriver.Text = 'MP-4200 TH'
     }
     $dialog.Controls.Add($cmbDriver)
     $btnRefreshDrivers = New-Object System.Windows.Forms.Button
@@ -772,6 +827,56 @@ function Show-LocalPortFallbackDialog {
         }
     })
     $dialog.Controls.Add($btnRefreshDrivers)
+
+    $btnVendorInstaller = New-Object System.Windows.Forms.Button
+    $btnVendorInstaller.Text = 'Instalar driver...'
+    $btnVendorInstaller.Location = New-Object System.Drawing.Point(310, 194)
+    $btnVendorInstaller.Size = New-Object System.Drawing.Size(150, 26)
+    $btnVendorInstaller.Add_Click({
+        $picker = New-Object System.Windows.Forms.OpenFileDialog
+        $picker.Filter = 'Instalador do fabricante (*.exe;*.msi)|*.exe;*.msi'
+        try {
+            if ($picker.ShowDialog($dialog) -ne [System.Windows.Forms.DialogResult]::OK) { return }
+            $installerPath = $picker.FileName
+            $signature = Get-AuthenticodeSignature -LiteralPath $installerPath -ErrorAction Stop
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+                [System.Windows.Forms.MessageBox]::Show($dialog,
+                    "O Windows não validou a assinatura deste instalador ($($signature.Status)). Escolha o pacote oficial assinado do fabricante.",
+                    'Instalador não validado', [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                return
+            }
+            $installerArgs = @{ Verb='RunAs'; PassThru=$true; ErrorAction='Stop' }
+            if ([IO.Path]::GetExtension($installerPath) -ieq '.msi') {
+                $installerArgs.FilePath = 'msiexec.exe'
+                $installerArgs.ArgumentList = '/i "' + $installerPath + '"'
+            } else { $installerArgs.FilePath = $installerPath }
+            $status.ForeColor = [System.Drawing.Color]::DarkBlue
+            $status.Text = 'Instalador do fabricante aberto. Conclua as telas dele.'
+            $vendorProcess = Start-Process @installerArgs
+            $wait = [Diagnostics.Stopwatch]::StartNew()
+            while (-not $vendorProcess.HasExited -and $wait.Elapsed.TotalSeconds -lt 180) {
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Milliseconds 200
+            }
+            $vendorProcess.Dispose()
+            $driverWanted = $cmbDriver.Text.Trim()
+            $cmbDriver.Items.Clear()
+            foreach ($availableDriver in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$availableDriver) }
+            $cmbDriver.Text = $driverWanted
+            if ($driverWanted -and $cmbDriver.Items.Contains($driverWanted)) {
+                $status.ForeColor = [System.Drawing.Color]::DarkGreen
+                $status.Text = "Driver '$driverWanted' instalado e confirmado neste PC."
+            } else {
+                $status.ForeColor = [System.Drawing.Color]::DarkGoldenrod
+                $status.Text = "Driver '$driverWanted' ainda não apareceu. Conclua o instalador e clique em 'Atualizar drivers'."
+            }
+        } catch {
+            $status.ForeColor = [System.Drawing.Color]::DarkRed
+            $status.Text = "Instalador não concluído: $($_.Exception.Message)"
+        } finally { $picker.Dispose() }
+    })
+    $dialog.Controls.Add($btnVendorInstaller)
 
     $lblInf = New-Object System.Windows.Forms.Label
     $lblInf.Location = New-Object System.Drawing.Point(16, 261)
@@ -835,12 +940,6 @@ function Show-LocalPortFallbackDialog {
         }
         if (-not $inf -and -not (@(Get-InstalledDriversSafe) -icontains $driver)) {
             $message = "O driver '$driver' não está instalado neste computador.`n`nInstale primeiro o driver oficial compatível com este Windows, clique em 'Atualizar drivers' e tente novamente."
-            if ($share -ieq 'MP' -and $driver -ieq 'MP-4200 TH') {
-                $officialInstaller = Join-Path $ScriptDir 'Drivers\MP4200TH_v5\Spooler_Bematech\BematechSpoolerDrivers_x64_v5.0.0.4.exe'
-                if (Test-Path -LiteralPath $officialInstaller -PathType Leaf) {
-                    $message += "`n`nInstalador x64 do fabricante incluído na pasta:`n$officialInstaller"
-                }
-            }
             $status.ForeColor = [System.Drawing.Color]::DarkRed
             $status.Text = "Driver '$driver' ausente neste PC."
             [System.Windows.Forms.MessageBox]::Show($dialog, $message, 'Driver necessário', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
@@ -889,10 +988,13 @@ function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
         [ValidateSet('AddPrinter','WScript','PrintUI')][string]$Method,
-        [int]$TimeoutSeconds = 25
+        [int]$TimeoutSeconds = 25,
+        [pscredential]$NetworkCredential,
+        [string]$CredentialServer = ''
     )
     $resultPath = ''
     $process = $null
+    $nativeProcess = $null
     try {
         if ($UNCPath -match '"') { return @{ Success=$false; Message='O caminho contém aspas inválidas.' } }
         if ($Method -in @('AddPrinter','WScript')) {
@@ -901,35 +1003,67 @@ function Invoke-BoundedPrinterAttempt {
             }
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -UNCPath "{1}" -ResultPath "{2}" -Method {3}' -f $PrinterConnectionPath,$UNCPath,$resultPath,$Method
-            $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru -ErrorAction Stop
+            $executable = Join-Path $PSHOME 'powershell.exe'
         } else {
             $arguments = 'printui.dll,PrintUIEntry /in /q /n "' + $UNCPath + '"'
-            $process = Start-Process -FilePath 'rundll32.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru -ErrorAction Stop
+            $executable = Join-Path $env:WINDIR 'System32\rundll32.exe'
+        }
+        if ($NetworkCredential) {
+            Initialize-PrinterNetOnlyProcess
+            $network = $NetworkCredential.GetNetworkCredential()
+            $domain = if ($network.Domain) { $network.Domain } else { $CredentialServer }
+            if (-not $domain) { return @{ Success=$false; Message='Informe a conta no formato SERVIDOR\usuario para autenticar a impressão.' } }
+            $startInfo = New-Object PrinterNetOnlyProcess+STARTUPINFO
+            $startInfo.cb = [Runtime.InteropServices.Marshal]::SizeOf($startInfo)
+            $nativeProcess = New-Object PrinterNetOnlyProcess+PROCESS_INFORMATION
+            $commandLine = '"' + $executable + '" ' + $arguments
+            $created = [PrinterNetOnlyProcess]::Create($network.UserName,$domain,$network.Password,2,
+                $executable,$commandLine,0x08000000,[IntPtr]::Zero,$env:WINDIR,[ref]$startInfo,[ref]$nativeProcess)
+            $network = $null
+            if (-not $created) {
+                $code = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                return @{ Success=$false; Message="Não foi possível iniciar conexão com credenciais de rede (Windows $code)."; Code=$code }
+            }
+        } else {
+            $process = Start-Process -FilePath $executable -ArgumentList $arguments -WindowStyle Hidden -PassThru -ErrorAction Stop
         }
         $timer = [Diagnostics.Stopwatch]::StartNew()
-        while (-not $process.HasExited) {
+        while ($true) {
+            $exited = if ($nativeProcess) { [PrinterNetOnlyProcess]::WaitForSingleObject($nativeProcess.hProcess,0) -eq 0 } else { $process.HasExited }
+            if ($exited) { break }
             if ($script:cancelPrinterConnection) {
-                try { $process.Kill(); [void]$process.WaitForExit(2000) } catch {}
+                try {
+                    if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1223) }
+                    else { $process.Kill(); [void]$process.WaitForExit(2000) }
+                } catch {}
                 return @{ Success=$false; Cancelled=$true; Message='Conexão cancelada pelo usuário.' }
             }
             if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-                try { $process.Kill(); [void]$process.WaitForExit(2000) } catch {}
+                try {
+                    if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1460) }
+                    else { $process.Kill(); [void]$process.WaitForExit(2000) }
+                } catch {}
                 return @{ Success=$false; TimedOut=$true; Message="A tentativa $Method excedeu $TimeoutSeconds segundos e foi interrompida." }
             }
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 100
         }
+        $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
         if ($Method -in @('AddPrinter','WScript')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
-                return @{ Success=$false; Message="$Method terminou com código $($process.ExitCode), sem resultado." }
+                return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
             return (Import-Clixml -LiteralPath $resultPath -ErrorAction Stop)
         }
-        return @{ Success=($process.ExitCode -eq 0); Message="PrintUI terminou com código $($process.ExitCode)." }
+        return @{ Success=($exitCode -eq 0); Message="PrintUI terminou com código $exitCode." }
     } catch {
         return @{ Success=$false; Message=$_.Exception.Message }
     } finally {
         if ($process) { $process.Dispose() }
+        if ($nativeProcess) {
+            [void][PrinterNetOnlyProcess]::CloseHandle($nativeProcess.hThread)
+            [void][PrinterNetOnlyProcess]::CloseHandle($nativeProcess.hProcess)
+        }
         if ($resultPath) { Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -949,6 +1083,7 @@ function Connect-UNCPrinterSafe {
     }
     $server = $matches[1]
     $share = $matches[2]
+    $networkCredential = if ($script:authenticatedPrinterServer -ieq $server) { $script:authenticatedPrinterCredential } else { $null }
 
     $candidates = @($cleanUNC)
     if (-not $AlternateHost -and $server -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
@@ -1010,7 +1145,7 @@ function Connect-UNCPrinterSafe {
             }
             $perAttempt = [Math]::Min($(if ($method -eq 'PrintUI') { 25 } else { 20 }), $remaining)
             Write-AppLog -Message "Tentando $method em $candidate (limite: $perAttempt segundos)." -Level 'INFO'
-            $attempt = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method $method -TimeoutSeconds $perAttempt
+            $attempt = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method $method -TimeoutSeconds $perAttempt -NetworkCredential $networkCredential -CredentialServer $server
             if ($attempt.Cancelled) {
                 Write-AppLog -Message "Conexão cancelada em $candidate." -Level 'AVISO'
                 return @{ Success=$false; Code=1223; Message='Conexão cancelada.' }
@@ -1022,7 +1157,6 @@ function Connect-UNCPrinterSafe {
             $confirmationAttempts = if ($attempt.Success) { 6 } else { 2 }
             if (Wait-PrinterConnectionInstalled -UNCPath $candidate -Attempts $confirmationAttempts) {
                 Write-AppLog -Message "Conexão $candidate confirmada no Windows via $method." -Level 'SUCESSO'
-
                 return @{ Success=$true; Code=0; ConnectedUNC=$candidate; Message='Impressora conectada e confirmada.' }
             }
             if ($script:cancelPrinterConnection) {
@@ -1032,6 +1166,10 @@ function Connect-UNCPrinterSafe {
             $failure = "$method em ${candidate}: $($attempt.Message) A fila não foi registrada."
             $failures += $failure
             Write-AppLog -Message $failure -Level 'AVISO'
+            if ([string]$attempt.Message -match 'driver necessário|driver.*não pode ser recuperado|driver.*cannot be retrieved|required driver.*not available') {
+                Write-AppLog -Message "O servidor aceitou a chamada de impressão, mas o driver da fila $candidate falta no cliente." -Level 'AVISO'
+                return @{ Success=$false; Code=1797; Message="A autenticação RPC funcionou, mas o driver desta fila não pôde ser obtido do servidor. Instale no Windows 10 um pacote confiável do fabricante com o nome exato do driver e tente conectar novamente." }
+            }
             $invalidName = [string]$attempt.Message -match '0x80070709|nome da impressora é inválido|nome de servidor ou de impressora é inválido|printer name is invalid'
             if ($method -eq 'AddPrinter') { $addPrinterInvalidName = [bool]$invalidName }
             if ($method -eq 'WScript' -and $addPrinterInvalidName -and $invalidName) {
@@ -1292,7 +1430,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.9.2]"
+$form.Text = "Arrumar Impressora VG [v1.9.5]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -2966,6 +3104,19 @@ $btnFixNetwork24H2.Add_Click({
         $diagnosis = Get-SharedPrinterAccessDiagnosis -UNCPath $unc -AlternateHost $alternateIp
         Write-AppLog -Message ("Diagnóstico Win10 → 11: " + ($diagnosis.Message -replace "`r?`n", ' | ')) -Level 'INFO'
         $message = $diagnosis.Message + "`n`nA correção 24H2 altera SMB e não resolve a instalação do driver desta impressora no Windows 10."
+        if ($diagnosis.RemoteQueueStatus -eq 'acesso negado') {
+            $pnlNetSearch.Visible = $true
+            $txtServerHost.Text = [string]$diagnosis.Server
+            if ($script:authenticatedPrinterServer -ieq $diagnosis.Server) {
+                $message += "`n`nA sessão SMB já foi autenticada como $script:authenticatedPrinterUser. A consulta de gerenciamento negada não comprova que a impressão será negada. Tente conectar; se falhar, confira o driver e execute o EXE como administrador."
+            } else {
+                $message += "`n`nDigite acima o usuário e a senha de uma conta do computador servidor, clique em 'Buscar Compartilhamentos' e tente a conexão. Use a senha da conta, não o PIN."
+            }
+            [System.Windows.Forms.MessageBox]::Show($form, $message, 'Autenticação necessária',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            $txtNetUser.Focus() | Out-Null
+            return
+        }
         if (-not $diagnosis.Valid -or -not $diagnosis.SMBReachable -or $global:SimulationMode) {
             if ($global:SimulationMode) { $message += "`n`nO modo Simulação bloqueia a instalação." }
             [System.Windows.Forms.MessageBox]::Show($form, $message, 'Diagnóstico Win10 → 11', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
@@ -3148,15 +3299,21 @@ $btnFindShares.Add_Click({
         return
     }
     if ($user -and $pass -and -not $global:SimulationMode) {
+        $credential = New-Object System.Management.Automation.PSCredential($user,(ConvertTo-SecureString $pass -AsPlainText -Force))
         $auth = Connect-PrinterServerAuthenticated -Server $server -User $user -Password $pass
         $txtNetPass.Clear()
         $pass = $null
         if (-not $auth.Success) {
+            $credential = $null
             Write-AppLog -Message "Autenticação em $server falhou com código $($auth.Code)." -Level 'AVISO'
             [System.Windows.Forms.MessageBox]::Show($form, $auth.Message, 'Autenticação no servidor', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
         }
         Write-AppLog -Message "Sessão autenticada em $server com a conta $user; será mantida para a instalação." -Level 'SUCESSO'
+        $script:authenticatedPrinterServer = $server
+        $script:authenticatedPrinterUser = $user
+        $script:authenticatedPrinterCredential = $credential
+        $credential = $null
     } elseif ($user -and $pass -and $global:SimulationMode) {
         Write-AppLog -Message "[SIMULAÇÃO] A autenticação SMB em $server não foi executada." -Level "SIMULACAO"
         $txtNetPass.Clear()
@@ -3185,6 +3342,16 @@ $btnFindShares.Add_Click({
         $status = "Disponivel para Conectar"
         if (Test-PrinterShareInstalled -UNCPath $unc -InstalledPrinters $installed) {
             $status = "Ja Instalada no Sistema"
+        }
+
+        $existingRow = $null
+        foreach ($gridRow in $dgvNetPrinters.Rows) {
+            if ([string]$gridRow.Cells['UNC'].Value -ieq $unc) { $existingRow = $gridRow; break }
+        }
+        if ($existingRow) {
+            $existingRow.Cells['Status'].Value = $status
+            $count++
+            continue
         }
 
         $serverDisp = Get-HostAndIpDisplay $resolvedServer
@@ -3323,7 +3490,7 @@ $btnConnectSelected.Add_Click({
         if ($srv -match '((?:\d{1,3}\.){3}\d{1,3})') { $alternateIp = $matches[1] }
         $result = Connect-UNCPrinterSafe -UNCPath $unc -AlternateHost $alternateIp
         $fallbackHandled = $false
-        if (-not $result.Success -and -not $result.Simulated -and $result.Code -notin @(53,1223) -and $script:currentWindowsBuild -lt 22000) {
+        if (-not $result.Success -and -not $result.Simulated -and $result.Code -notin @(53,1223,1801) -and $script:currentWindowsBuild -lt 22000) {
             $btnCancelConnection.Visible = $false
             Hide-LoadingIndicator -Button $btnConnectSelected
             $offer = Offer-Win10LocalPortFallback -UNCPath $unc -AlternateHost $alternateIp -PreviousResult $result
@@ -3363,6 +3530,46 @@ $btnConnectSelected.Add_Click({
         }
     } elseif ($result.Code -eq 1223) {
         Update-StatusStrip -Text 'Conexão cancelada.' -Color 'DarkGoldenrod'
+    } elseif ($result.Code -eq 1797) {
+        Update-StatusStrip -Text 'Acesso à fila confirmado; falta o driver no Windows 10.' -Color 'DarkOrange'
+        $message = "$($result.Message)`n`nUse 'Instalar via porta local' > 'Instalar driver...' para abrir o instalador do fabricante. Depois feche essa janela e clique novamente em 'Conectar Impressora Selecionada'."
+        [System.Windows.Forms.MessageBox]::Show($form, $message, 'Driver necessário no cliente',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+    } elseif ($result.Code -eq 1801) {
+        $serverForAuth = ([regex]::Match($unc, '^\\\\([^\\]+)\\')).Groups[1].Value
+        $pnlNetSearch.Visible = $true
+        $txtServerHost.Text = $serverForAuth
+        $authAdvice = if ($script:authenticatedPrinterServer -ieq $serverForAuth) {
+            "A sessão SMB já foi autenticada como $script:authenticatedPrinterUser. O erro persistiu após a autenticação.`n"
+        } else {
+            "Informe usuário e senha de uma conta do computador $serverForAuth na busca manual acima, clique em 'Buscar Compartilhamentos' e tente novamente. Use a senha da conta, não o PIN.`n"
+        }
+        $advice = "A fila $unc existe na rede, mas o Windows recusou a conexão com 0x80070709.`n`n" +
+            $authAdvice +
+            "Se o driver não estiver instalado neste PC, a instalação exige administrador. O botão 'Instalar via porta local' aceita o INF do fabricante e pede a elevação do Windows.`n`n" +
+            "O diagnóstico da rede não comprova permissão na fila. A impressora física também precisa estar conectada para validar uma página de teste."
+        if (-not (Test-IsAdmin) -and $LauncherPath -and (Test-Path -LiteralPath $LauncherPath -PathType Leaf)) {
+            $answer = [System.Windows.Forms.MessageBox]::Show($form,
+                $advice + "`n`nDeseja reabrir este EXE como administrador agora? Depois da elevação, autentique-se novamente no servidor.",
+                'Conexão requer autenticação e driver', [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+                try {
+                    Start-Process -FilePath $LauncherPath -Verb RunAs -ErrorAction Stop | Out-Null
+                    Write-AppLog -Message 'Reabertura como administrador solicitada após erro 0x80070709.' -Level 'INFO'
+                    $form.Close()
+                    return
+                } catch {
+                    Write-AppLog -Message "Reabertura como administrador não concluída: $($_.Exception.Message)" -Level 'AVISO'
+                }
+            }
+        } else {
+            [System.Windows.Forms.MessageBox]::Show($form, $advice, 'Conexão requer autenticação e driver',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
+        $txtNetUser.Focus() | Out-Null
+        $statusAdvice = if ($script:authenticatedPrinterServer -ieq $serverForAuth) { 'sessão autenticada; confira driver e elevação' } else { "autentique-se em $serverForAuth e confira o driver" }
+        Update-StatusStrip -Text "Conexão recusada: $statusAdvice." -Color 'DarkRed'
     } elseif ($fallbackHandled) {
         Update-StatusStrip -Text "Conexão normal não instalada: $unc. A instalação por porta local pode ser tentada pelo botão dedicado." -Color 'DarkRed'
     } else {

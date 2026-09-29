@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Arrumar Impressora VG")]
 [assembly: AssemblyDescription("Diagnostico e configuracao de impressoras")]
 [assembly: AssemblyProduct("Arrumar Impressora VG")]
-[assembly: AssemblyVersion("1.9.2.0")]
-[assembly: AssemblyFileVersion("1.9.2.0")]
+[assembly: AssemblyVersion("1.9.5.0")]
+[assembly: AssemblyFileVersion("1.9.5.0")]
 
 namespace AssistenteImpressorasLauncher
 {
@@ -43,8 +43,10 @@ namespace AssistenteImpressorasLauncher
                 string compatibilityDiagnosisPath = ExtractResource(CompatibilityDiagnosisResource, workDirectory, "Diagnostico_Compartilhamento.ps1");
 
                 string appDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string launcherPath = Assembly.GetExecutingAssembly().Location;
                 string arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " +
                     Quote(scriptPath) + " -AppDirectory " + Quote(appDirectory) +
+                    " -LauncherPath " + Quote(launcherPath) +
                     " -PrinterFixPath " + Quote(printerFixPath) +
                     " -NetworkFixPath " + Quote(networkFixPath) +
                     " -LocalPortInstallPath " + Quote(localPortPath) +
@@ -92,7 +94,27 @@ namespace AssistenteImpressorasLauncher
 
         private static string Quote(string text)
         {
-            return "\"" + text.Replace("\"", "\\\"") + "\"";
+            StringBuilder result = new StringBuilder("\"");
+            int slashes = 0;
+            foreach (char character in text)
+            {
+                if (character == '\\') { slashes++; }
+                else if (character == '"')
+                {
+                    result.Append('\\', slashes * 2 + 1);
+                    result.Append('"');
+                    slashes = 0;
+                }
+                else
+                {
+                    result.Append('\\', slashes);
+                    result.Append(character);
+                    slashes = 0;
+                }
+            }
+            result.Append('\\', slashes * 2);
+            result.Append('"');
+            return result.ToString();
         }
     }
 }
