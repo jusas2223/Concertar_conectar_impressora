@@ -1084,6 +1084,11 @@ function Connect-UNCPrinterSafe {
     $server = $matches[1]
     $share = $matches[2]
     $networkCredential = if ($script:authenticatedPrinterServer -ieq $server) { $script:authenticatedPrinterCredential } else { $null }
+    if ($networkCredential) {
+        Write-AppLog -Message "Conexão de impressão em $server usará credenciais de rede de $($networkCredential.UserName)." -Level 'INFO'
+    } else {
+        Write-AppLog -Message "Conexão de impressão em $server sem credenciais explícitas do servidor; identidade local: $env:USERDOMAIN\$env:USERNAME." -Level 'AVISO'
+    }
 
     $candidates = @($cleanUNC)
     if (-not $AlternateHost -and $server -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
@@ -1430,7 +1435,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.9.5]"
+$form.Text = "Arrumar Impressora VG [v1.9.6]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -3478,6 +3483,39 @@ $btnConnectSelected.Add_Click({
             $tabControl.SelectedTab = $tab5
         }
         return
+    }
+
+    # A busca manual não é obrigatória para autenticar: o botão de conexão
+    # aplica as credenciais preenchidas à fila selecionada antes de chamar RPC.
+    $serverForConnection = ([regex]::Match($unc, '^\\\\([^\\]+)\\')).Groups[1].Value
+    $enteredUser = $txtNetUser.Text.Trim()
+    $enteredPassword = $txtNetPass.Text
+    if (($enteredUser -and -not $enteredPassword -and
+        ($script:authenticatedPrinterServer -ine $serverForConnection -or $script:authenticatedPrinterUser -ine $enteredUser)) -or
+        ($enteredPassword -and -not $enteredUser)) {
+        [System.Windows.Forms.MessageBox]::Show($form,
+            "Informe usuário e senha juntos. Use uma conta do computador $serverForConnection e a senha da conta, não o PIN.",
+            'Credenciais incompletas', [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    if ($enteredUser -and $enteredPassword -and -not $global:SimulationMode) {
+        $newCredential = New-Object System.Management.Automation.PSCredential($enteredUser,(ConvertTo-SecureString $enteredPassword -AsPlainText -Force))
+        $auth = Connect-PrinterServerAuthenticated -Server $serverForConnection -User $enteredUser -Password $enteredPassword
+        $txtNetPass.Clear()
+        $enteredPassword = $null
+        if (-not $auth.Success) {
+            $newCredential = $null
+            Write-AppLog -Message "Autenticação de impressão em $serverForConnection falhou com código $($auth.Code)." -Level 'AVISO'
+            [System.Windows.Forms.MessageBox]::Show($form, $auth.Message, 'Autenticação no servidor',
+                [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            return
+        }
+        $script:authenticatedPrinterServer = $serverForConnection
+        $script:authenticatedPrinterUser = $enteredUser
+        $script:authenticatedPrinterCredential = $newCredential
+        $newCredential = $null
+        Write-AppLog -Message "Credenciais de $enteredUser confirmadas para $serverForConnection ao clicar em Conectar." -Level 'SUCESSO'
     }
 
     # Se for impressora compartilhada de rede (SMB / UNC)

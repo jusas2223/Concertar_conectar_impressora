@@ -23,4 +23,10 @@ if (-not $localPort.Success -or
     -not $localPort.Groups['body'].Value.Contains("if (-not (Test-IsAdmin)) { `$start.Verb = 'RunAs' }")) {
     throw 'O instalador local nao preserva o contexto SMB quando o aplicativo ja esta elevado.'
 }
+$greenButton = [regex]::Match($source, '(?s)\$btnConnectSelected\.Add_Click\(\{(?<body>.*?)\r?\n\}\)')
+if (-not $greenButton.Success -or
+    -not $greenButton.Groups['body'].Value.Contains('Connect-PrinterServerAuthenticated -Server $serverForConnection') -or
+    -not $greenButton.Groups['body'].Value.Contains('$script:authenticatedPrinterCredential = $newCredential')) {
+    throw 'O botao verde nao aplica as credenciais preenchidas antes de conectar.'
+}
 Write-Output 'OK: autenticacao nativa compila, senha nao vai para net.exe e sessao continua disponivel para a fila.'

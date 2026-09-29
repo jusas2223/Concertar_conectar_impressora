@@ -2,7 +2,7 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.9.5**.
+Versão atual: **1.9.6**.
 
 ## Funções
 
@@ -12,7 +12,7 @@ Versão atual: **1.9.5**.
 - Diagnóstico de compatibilidade Windows 10 → Windows 11 e alternativa por porta local UNC.
 - Diagnóstico da fila remota com indicação de acesso negado, nome do driver remoto quando disponível e presença desse driver no cliente.
 - Busca manual com usuário e senha do computador servidor; a senha não é enviada em argumentos de linha de comando. O fluxo de conexão orienta a elevação quando o Windows exige administrador para instalar o driver.
-- Conexão RPC com as credenciais informadas na busca manual. Isso corrige o caso em que SMB autentica, mas o Windows 10 retorna `0x80070709` ao abrir a fila do Windows 11. A senha permanece em memória e o processo conserva o usuário local do cliente.
+- Conexão RPC com as credenciais informadas na busca manual ou diretamente antes de clicar em **Conectar Impressora Selecionada**. O log indica se a conexão usou a conta do servidor ou a identidade local, sem registrar a senha.
 - Análise de filas, trabalhos presos e redirecionamento de impressoras por Área de Trabalho Remota.
 - Correções guiadas para erros 0x00000709/0x0000011b e acesso à rede no Windows 11 24H2, com registro das alterações e scripts de restauração.
 - Modo Simulação para examinar o fluxo sem aplicar alterações.
@@ -23,7 +23,7 @@ No Windows, abra `Arrumar_impressoraVG.exe`. Algumas operações exigem privilé
 
 Para uma impressora USB compartilhada por outro PC, confirme que a conta informada na busca manual tem senha e permissão **Imprimir** no servidor. Se o driver não estiver no cliente, use **Instalar via porta local → Instalar driver...** para abrir o instalador oficial assinado do fabricante; o programa verifica depois se o driver apareceu no Windows. A impressora física precisa estar conectada para confirmar a página de teste.
 
-No laboratório Windows 10 → Windows 11, a fila foi registrada após autenticar o processo de impressão e instalar o driver correspondente no cliente. O teste não enviou uma página física porque a impressora estava desconectada.
+No laboratório Windows 10 → Windows 11, a fila `ArgoxRede` foi registrada após autenticar o processo de impressão e instalar o driver correspondente no cliente. Na fila `MP`, a abertura remota com credenciais funcionou, mas a instalação da fila não terminou: o driver `MP-4200 TH` não está instalado na VM. Nenhum teste enviou uma página física.
 
 Logs e relatórios são criados na pasta `Logs` ao lado do EXE quando há permissão de escrita. Caso contrário, o assistente usa uma pasta local gravável. A pasta `Logs` não deve ser publicada.
 
