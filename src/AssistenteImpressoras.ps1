@@ -171,6 +171,76 @@ public static class PrinterNetworkAuth {
     }
 }
 
+function Request-PrinterServerCredential {
+    param([string]$Server, [string]$InitialUser = '', [System.Windows.Forms.IWin32Window]$Parent)
+
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Conta para impressora em $Server"
+    $dialog.Size = New-Object System.Drawing.Size(455, 235)
+    $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
+    $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+
+    $instruction = New-Object System.Windows.Forms.Label
+    $instruction.Text = 'Use uma conta do PC que compartilha a impressora. Digite a senha da conta, não o PIN.'
+    $instruction.Location = New-Object System.Drawing.Point(15, 12)
+    $instruction.Size = New-Object System.Drawing.Size(410, 35)
+    $dialog.Controls.Add($instruction)
+
+    $userLabel = New-Object System.Windows.Forms.Label
+    $userLabel.Text = 'Usuário:'
+    $userLabel.Location = New-Object System.Drawing.Point(15, 57)
+    $userLabel.AutoSize = $true
+    $dialog.Controls.Add($userLabel)
+    $userBox = New-Object System.Windows.Forms.TextBox
+    $userBox.Location = New-Object System.Drawing.Point(95, 53)
+    $userBox.Size = New-Object System.Drawing.Size(328, 23)
+    $userBox.Text = if ($InitialUser) { $InitialUser } else { "$Server\" }
+    $dialog.Controls.Add($userBox)
+
+    $passLabel = New-Object System.Windows.Forms.Label
+    $passLabel.Text = 'Senha:'
+    $passLabel.Location = New-Object System.Drawing.Point(15, 92)
+    $passLabel.AutoSize = $true
+    $dialog.Controls.Add($passLabel)
+    $passBox = New-Object System.Windows.Forms.TextBox
+    $passBox.Location = New-Object System.Drawing.Point(95, 88)
+    $passBox.Size = New-Object System.Drawing.Size(328, 23)
+    $passBox.UseSystemPasswordChar = $true
+    $dialog.Controls.Add($passBox)
+
+    $connectButton = New-Object System.Windows.Forms.Button
+    $connectButton.Text = 'Conectar'
+    $connectButton.Location = New-Object System.Drawing.Point(15, 137)
+    $connectButton.Size = New-Object System.Drawing.Size(110, 32)
+    $connectButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dialog.Controls.Add($connectButton)
+    $dialog.AcceptButton = $connectButton
+
+    $withoutButton = New-Object System.Windows.Forms.Button
+    $withoutButton.Text = 'Tentar sem senha'
+    $withoutButton.Location = New-Object System.Drawing.Point(137, 137)
+    $withoutButton.Size = New-Object System.Drawing.Size(135, 32)
+    $withoutButton.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
+    $dialog.Controls.Add($withoutButton)
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = 'Cancelar'
+    $cancelButton.Location = New-Object System.Drawing.Point(284, 137)
+    $cancelButton.Size = New-Object System.Drawing.Size(135, 32)
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancelButton)
+    $dialog.CancelButton = $cancelButton
+
+    try {
+        $choice = $dialog.ShowDialog($Parent)
+        if ($choice -eq [System.Windows.Forms.DialogResult]::Ignore) { return @{ WithoutCredential=$true } }
+        if ($choice -ne [System.Windows.Forms.DialogResult]::OK) { return @{ Cancelled=$true } }
+        return @{ User=$userBox.Text.Trim(); Password=$passBox.Text }
+    } finally { $dialog.Dispose() }
+}
+
 function Initialize-PrinterNetOnlyProcess {
     if ('PrinterNetOnlyProcess' -as [type]) { return }
     Add-Type -TypeDefinition @'
@@ -1435,7 +1505,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.9.6]"
+$form.Text = "Arrumar Impressora VG [v1.9.7]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -3490,6 +3560,31 @@ $btnConnectSelected.Add_Click({
     $serverForConnection = ([regex]::Match($unc, '^\\\\([^\\]+)\\')).Groups[1].Value
     $enteredUser = $txtNetUser.Text.Trim()
     $enteredPassword = $txtNetPass.Text
+    $storedCredentialMatches = $script:authenticatedPrinterServer -ieq $serverForConnection -and
+        $script:authenticatedPrinterCredential -and
+        (-not $enteredUser -or $script:authenticatedPrinterUser -ieq $enteredUser)
+    if (-not $global:SimulationMode -and -not ($enteredUser -and $enteredPassword) -and -not $storedCredentialMatches) {
+        $authChoice = Request-PrinterServerCredential -Server $serverForConnection -InitialUser $enteredUser -Parent $form
+        if ($authChoice.Cancelled) { return }
+        if ($authChoice.WithoutCredential) {
+            $enteredUser = ''
+            $enteredPassword = ''
+            $script:authenticatedPrinterServer = ''
+            $script:authenticatedPrinterUser = ''
+            $script:authenticatedPrinterCredential = $null
+            Write-AppLog -Message "Usuário escolheu tentar $serverForConnection sem credenciais explícitas." -Level 'AVISO'
+        } else {
+            $enteredUser = [string]$authChoice.User
+            $enteredPassword = [string]$authChoice.Password
+            if (-not $enteredUser -or -not $enteredPassword) {
+                [System.Windows.Forms.MessageBox]::Show($form, 'Preencha usuário e senha da conta do servidor.',
+                    'Credenciais incompletas', [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+                return
+            }
+            $txtNetUser.Text = $enteredUser
+        }
+    }
     if (($enteredUser -and -not $enteredPassword -and
         ($script:authenticatedPrinterServer -ine $serverForConnection -or $script:authenticatedPrinterUser -ine $enteredUser)) -or
         ($enteredPassword -and -not $enteredUser)) {
@@ -3580,7 +3675,7 @@ $btnConnectSelected.Add_Click({
         $authAdvice = if ($script:authenticatedPrinterServer -ieq $serverForAuth) {
             "A sessão SMB já foi autenticada como $script:authenticatedPrinterUser. O erro persistiu após a autenticação.`n"
         } else {
-            "Informe usuário e senha de uma conta do computador $serverForAuth na busca manual acima, clique em 'Buscar Compartilhamentos' e tente novamente. Use a senha da conta, não o PIN.`n"
+            "Esta tentativa usou a conta local $env:USERDOMAIN\$env:USERNAME, sem credenciais do servidor. Clique novamente em 'Conectar Impressora Selecionada' e informe a conta de $serverForAuth quando solicitado. Use a senha da conta, não o PIN.`n"
         }
         $advice = "A fila $unc existe na rede, mas o Windows recusou a conexão com 0x80070709.`n`n" +
             $authAdvice +
@@ -3589,7 +3684,7 @@ $btnConnectSelected.Add_Click({
         if (-not (Test-IsAdmin) -and $LauncherPath -and (Test-Path -LiteralPath $LauncherPath -PathType Leaf)) {
             $answer = [System.Windows.Forms.MessageBox]::Show($form,
                 $advice + "`n`nDeseja reabrir este EXE como administrador agora? Depois da elevação, autentique-se novamente no servidor.",
-                'Conexão requer autenticação e driver', [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                'Falha ao conectar impressora', [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Warning)
             if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
                 try {
@@ -3602,7 +3697,7 @@ $btnConnectSelected.Add_Click({
                 }
             }
         } else {
-            [System.Windows.Forms.MessageBox]::Show($form, $advice, 'Conexão requer autenticação e driver',
+            [System.Windows.Forms.MessageBox]::Show($form, $advice, 'Falha ao conectar impressora',
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         }
         $txtNetUser.Focus() | Out-Null

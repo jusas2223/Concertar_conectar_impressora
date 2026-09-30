@@ -25,6 +25,7 @@ if (-not $localPort.Success -or
 }
 $greenButton = [regex]::Match($source, '(?s)\$btnConnectSelected\.Add_Click\(\{(?<body>.*?)\r?\n\}\)')
 if (-not $greenButton.Success -or
+    -not $greenButton.Groups['body'].Value.Contains('Request-PrinterServerCredential -Server $serverForConnection') -or
     -not $greenButton.Groups['body'].Value.Contains('Connect-PrinterServerAuthenticated -Server $serverForConnection') -or
     -not $greenButton.Groups['body'].Value.Contains('$script:authenticatedPrinterCredential = $newCredential')) {
     throw 'O botao verde nao aplica as credenciais preenchidas antes de conectar.'

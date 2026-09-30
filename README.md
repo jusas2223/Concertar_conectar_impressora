@@ -2,7 +2,7 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.9.6**.
+Versão atual: **1.9.7**.
 
 ## Funções
 
@@ -12,7 +12,7 @@ Versão atual: **1.9.6**.
 - Diagnóstico de compatibilidade Windows 10 → Windows 11 e alternativa por porta local UNC.
 - Diagnóstico da fila remota com indicação de acesso negado, nome do driver remoto quando disponível e presença desse driver no cliente.
 - Busca manual com usuário e senha do computador servidor; a senha não é enviada em argumentos de linha de comando. O fluxo de conexão orienta a elevação quando o Windows exige administrador para instalar o driver.
-- Conexão RPC com as credenciais informadas na busca manual ou diretamente antes de clicar em **Conectar Impressora Selecionada**. O log indica se a conexão usou a conta do servidor ou a identidade local, sem registrar a senha.
+- Conexão RPC com as credenciais informadas na busca manual ou no próprio botão **Conectar Impressora Selecionada**. Se faltarem credenciais, o botão solicita a conta do servidor antes de tentar; também permite escolher explicitamente uma tentativa sem senha. O log indica qual identidade foi usada, sem registrar a senha.
 - Análise de filas, trabalhos presos e redirecionamento de impressoras por Área de Trabalho Remota.
 - Correções guiadas para erros 0x00000709/0x0000011b e acesso à rede no Windows 11 24H2, com registro das alterações e scripts de restauração.
 - Modo Simulação para examinar o fluxo sem aplicar alterações.
