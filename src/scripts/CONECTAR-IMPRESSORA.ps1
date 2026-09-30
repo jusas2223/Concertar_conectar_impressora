@@ -1,7 +1,7 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$UNCPath,
     [Parameter(Mandatory=$true)][string]$ResultPath,
-    [ValidateSet('AddPrinter','WScript')][string]$Method = 'AddPrinter'
+    [ValidateSet('AddPrinter','WScript','PublishDriver','InstallDriver')][string]$Method = 'AddPrinter'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +10,9 @@ try {
     if ($UNCPath -notmatch '^\\\\[^\\]+\\[^\\]+$') {
         throw 'O caminho da impressora precisa estar no formato \\SERVIDOR\Fila.'
     }
-    if ($Method -eq 'AddPrinter') {
+    if ($Method -in @('PublishDriver','InstallDriver')) {
+        $result = & (Join-Path $PSScriptRoot 'DRIVER-DO-SERVIDOR.ps1') -UNCPath $UNCPath -Action $Method -ProgressPath ($ResultPath + '.progress')
+    } elseif ($Method -eq 'AddPrinter') {
         if (-not (Get-Command Add-Printer -ErrorAction SilentlyContinue)) {
             throw 'O comando Add-Printer não está disponível neste Windows.'
         }
@@ -19,7 +21,9 @@ try {
         $network = New-Object -ComObject WScript.Network -ErrorAction Stop
         $network.AddWindowsPrinterConnection($UNCPath)
     }
-    $result = @{ Success=$true; Message="O Windows concluiu $Method." }
+    if ($Method -notin @('PublishDriver','InstallDriver')) {
+        $result = @{ Success=$true; Message="O Windows concluiu $Method." }
+    }
 } catch {
     $result = @{ Success=$false; Message=$_.Exception.Message; HResult=$_.Exception.HResult }
 }

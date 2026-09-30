@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Arrumar Impressora VG")]
 [assembly: AssemblyDescription("Diagnostico e configuracao de impressoras")]
 [assembly: AssemblyProduct("Arrumar Impressora VG")]
-[assembly: AssemblyVersion("1.9.7.0")]
-[assembly: AssemblyFileVersion("1.9.7.0")]
+[assembly: AssemblyVersion("1.9.8.0")]
+[assembly: AssemblyFileVersion("1.9.8.0")]
 
 namespace AssistenteImpressorasLauncher
 {
@@ -21,6 +21,8 @@ namespace AssistenteImpressorasLauncher
         private const string NetworkFixResource = "AssistenteImpressoras.CORRIGIR-ACESSO-REDE-24H2.ps1";
         private const string NetworkRestoreResource = "AssistenteImpressoras.RESTAURAR-ACESSO-REDE.ps1";
         private const string LocalPortResource = "AssistenteImpressoras.INSTALAR-PORTA-LOCAL.ps1";
+        private const string InterfaceResource = "AssistenteImpressoras.INTERFACE.ps1";
+        private const string ServerDriverResource = "AssistenteImpressoras.DRIVER-DO-SERVIDOR.ps1";
         private const string ConnectionResource = "AssistenteImpressoras.CONECTAR-IMPRESSORA.ps1";
         private const string CompatibilityDiagnosisResource = "AssistenteImpressoras.Diagnostico_Compartilhamento.ps1";
 
@@ -40,6 +42,8 @@ namespace AssistenteImpressorasLauncher
                 ExtractResource(NetworkRestoreResource, workDirectory, "RESTAURAR-ACESSO-REDE.ps1");
                 string localPortPath = ExtractResource(LocalPortResource, workDirectory, "INSTALAR-PORTA-LOCAL.ps1");
                 string connectionPath = ExtractResource(ConnectionResource, workDirectory, "CONECTAR-IMPRESSORA.ps1");
+                ExtractResource(ServerDriverResource, workDirectory, "DRIVER-DO-SERVIDOR.ps1");
+                ExtractResource(InterfaceResource, workDirectory, "INTERFACE.ps1");
                 string compatibilityDiagnosisPath = ExtractResource(CompatibilityDiagnosisResource, workDirectory, "Diagnostico_Compartilhamento.ps1");
 
                 string appDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);

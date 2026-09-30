@@ -2,7 +2,7 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.9.7**.
+Versão atual: **1.9.8**.
 
 ## Funções
 
@@ -16,12 +16,24 @@ Versão atual: **1.9.7**.
 - Análise de filas, trabalhos presos e redirecionamento de impressoras por Área de Trabalho Remota.
 - Correções guiadas para erros 0x00000709/0x0000011b e acesso à rede no Windows 11 24H2, com registro das alterações e scripts de restauração.
 - Modo Simulação para examinar o fluxo sem aplicar alterações.
+- Menu lateral, ações agrupadas e tabelas com melhor contraste, usando apenas WinForms.
+- Preparação e transferência de drivers Tipo 3 pelo próprio servidor, sem download da internet.
 
 ## Executar
 
 No Windows, abra `Arrumar_impressoraVG.exe`. Algumas operações exigem privilégios de administrador. As correções de políticas e a limpeza de filas só ocorrem quando o usuário aciona os respectivos botões.
 
-Para uma impressora USB compartilhada por outro PC, confirme que a conta informada na busca manual tem senha e permissão **Imprimir** no servidor. Se o driver não estiver no cliente, use **Instalar via porta local → Instalar driver...** para abrir o instalador oficial assinado do fabricante; o programa verifica depois se o driver apareceu no Windows. A impressora física precisa estar conectada para confirmar a página de teste.
+Para uma impressora USB compartilhada por outro PC, confirme que a conta informada na busca manual tem senha e permissão **Imprimir** no servidor. A impressora física precisa estar conectada para confirmar a página de teste.
+
+### Receber o driver do servidor, sem internet
+
+1. No PC que compartilha a impressora, execute o EXE como administrador. Em **Impressoras locais**, selecione a fila e clique em **Preparar driver para outros PCs**.
+2. No cliente, execute o mesmo EXE como administrador. Em **Impressoras na rede → Buscar servidor**, informe o servidor e a conta dele, busque os compartilhamentos e clique em **Conectar impressora**.
+3. Quando a conexão indicar falha na obtenção do driver, o EXE tenta receber o pacote preparado em `print$`, instalar o driver e repetir a conexão uma vez. Em **Instalar por porta local**, também existe **Receber driver do servidor**.
+
+Prepare novamente após mudar o driver ou o nome do compartilhamento. O pacote é específico da fila e da arquitetura; nesta implementação, o servidor prepara sua arquitetura atual. Componentes Microsoft vêm do Windows do cliente. Drivers Tipo 4 e drivers que dependem de monitor adicional exigem o pacote completo do fabricante; o EXE informa a limitação. A transferência não altera políticas de autenticação, assinatura SMB ou restrições de drivers.
+
+Validação da versão 1.9.8: testes do fluxo, cópia SMB, registro de driver temporário e rejeição de arquivos adulterados/caminhos inválidos passaram. O teste real de instalação da MP no Windows 10 permanece pendente: a VM do laboratório travou e foi salva. A impressão física também permanece pendente.
 
 No laboratório Windows 10 → Windows 11, a fila `ArgoxRede` foi registrada após autenticar o processo de impressão e instalar o driver correspondente no cliente. Na fila `MP`, a abertura remota com credenciais funcionou, mas a instalação da fila não terminou: o driver `MP-4200 TH` não está instalado na VM. Nenhum teste enviou uma página física.
 

@@ -9,3 +9,4 @@ Logs/
 bin/
 obj/
 .vs/
+Preview_*

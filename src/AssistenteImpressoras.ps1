@@ -875,6 +875,8 @@ function Show-LocalPortFallbackDialog {
     foreach ($driverName in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$driverName) }
     if ($SuggestedDriverName) {
         $cmbDriver.Text = $SuggestedDriverName
+    } elseif ($share -ieq 'MP' -and $cmbDriver.Items.Contains('MP-4200 TH')) {
+        $cmbDriver.Text = 'MP-4200 TH'
     }
     $dialog.Controls.Add($cmbDriver)
     $btnRefreshDrivers = New-Object System.Windows.Forms.Button
@@ -975,6 +977,35 @@ function Show-LocalPortFallbackDialog {
     $lblNote.Text = 'A porta local ainda precisa de acesso à rede e permissão de impressão no PC servidor. Se selecionar um INF, digite o nome do modelo que aparece no pacote. Depois da instalação, faça uma página de teste.'
     $dialog.Controls.Add($lblNote)
 
+    $lblNote.Height = 24
+    $btnServerDriver = New-Object System.Windows.Forms.Button
+    $btnServerDriver.Text = 'Receber driver do servidor (sem download da internet)'
+    $btnServerDriver.Location = New-Object System.Drawing.Point(16, 343)
+    $btnServerDriver.Size = New-Object System.Drawing.Size(590, 27)
+    $btnServerDriver.Add_Click({
+        $btnServerDriver.Enabled = $false
+        try {
+            $port = $cmbPath.Text.Trim()
+            $credential = $null
+            if ($port -notmatch '^\\\\([^\\]+)\\[^\\]+$') { throw 'Informe o caminho \\SERVIDOR\Fila.' }
+            $driverServer = $matches[1]
+            if ($script:authenticatedPrinterServer -ieq $driverServer) { $credential = $script:authenticatedPrinterCredential }
+            $script:cancelPrinterConnection = $false
+            $status.Text = 'Recebendo o driver preparado no servidor...'
+            $received = Invoke-BoundedPrinterAttempt -UNCPath $port -Method InstallDriver -TimeoutSeconds 40 -NetworkCredential $credential -CredentialServer $driverServer
+            Write-AppLog -Message "Receber driver: $($received.Message)" -Level $(if ($received.Success) { 'SUCESSO' } else { 'AVISO' })
+            $status.Text = $received.Message
+            if ($received.Success) {
+                $cmbDriver.Items.Clear()
+                foreach ($availableDriver in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$availableDriver) }
+                $cmbDriver.SelectedItem = $received.DriverName
+                $status.ForeColor = [System.Drawing.Color]::DarkGreen
+            } else { $status.ForeColor = [System.Drawing.Color]::DarkRed }
+        } catch { $status.Text = $_.Exception.Message }
+        finally { $btnServerDriver.Enabled = $true }
+    })
+    $dialog.Controls.Add($btnServerDriver)
+
     $status = New-Object System.Windows.Forms.Label
     $status.Location = New-Object System.Drawing.Point(16, 372)
     $status.Size = New-Object System.Drawing.Size(590, 29)
@@ -1010,6 +1041,12 @@ function Show-LocalPortFallbackDialog {
         }
         if (-not $inf -and -not (@(Get-InstalledDriversSafe) -icontains $driver)) {
             $message = "O driver '$driver' não está instalado neste computador.`n`nInstale primeiro o driver oficial compatível com este Windows, clique em 'Atualizar drivers' e tente novamente."
+            if ($share -ieq 'MP' -and $driver -ieq 'MP-4200 TH') {
+                $officialInstaller = Join-Path $ScriptDir 'Drivers\MP4200TH_v5\Spooler_Bematech\BematechSpoolerDrivers_x64_v5.0.0.4.exe'
+                if (Test-Path -LiteralPath $officialInstaller -PathType Leaf) {
+                    $message += "`n`nInstalador x64 do fabricante incluído na pasta:`n$officialInstaller"
+                }
+            }
             $status.ForeColor = [System.Drawing.Color]::DarkRed
             $status.Text = "Driver '$driver' ausente neste PC."
             [System.Windows.Forms.MessageBox]::Show($dialog, $message, 'Driver necessário', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
@@ -1051,13 +1088,13 @@ function Offer-Win10LocalPortFallback {
     if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
         return @{ Handled=$true; Result=$null }
     }
-    return @{ Handled=$true; Result=(Show-LocalPortFallbackDialog -UNCPath $UNCPath -AlternateHost $AlternateHost -PreviousError $PreviousResult.Message) }
+    return @{ Handled=$true; Result=(Show-LocalPortFallbackDialog -UNCPath $UNCPath -AlternateHost $AlternateHost -PreviousError $PreviousResult.Message -SuggestedDriverName $PreviousResult.DriverName) }
 }
 
 function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
-        [ValidateSet('AddPrinter','WScript','PrintUI')][string]$Method,
+        [ValidateSet('AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver')][string]$Method,
         [int]$TimeoutSeconds = 25,
         [pscredential]$NetworkCredential,
         [string]$CredentialServer = ''
@@ -1067,7 +1104,7 @@ function Invoke-BoundedPrinterAttempt {
     $nativeProcess = $null
     try {
         if ($UNCPath -match '"') { return @{ Success=$false; Message='O caminho contém aspas inválidas.' } }
-        if ($Method -in @('AddPrinter','WScript')) {
+        if ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver')) {
             if (-not $PrinterConnectionPath -or -not (Test-Path -LiteralPath $PrinterConnectionPath)) {
                 return @{ Success=$false; Message='Rotina interna de conexão não encontrada no EXE.' }
             }
@@ -1109,17 +1146,21 @@ function Invoke-BoundedPrinterAttempt {
                 return @{ Success=$false; Cancelled=$true; Message='Conexão cancelada pelo usuário.' }
             }
             if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                $stageMessage = ''
+                if ($resultPath -and (Test-Path -LiteralPath ($resultPath + '.progress'))) {
+                    try { $stageMessage = ' Etapa: ' + [IO.File]::ReadAllText($resultPath + '.progress') } catch {}
+                }
                 try {
                     if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1460) }
                     else { $process.Kill(); [void]$process.WaitForExit(2000) }
                 } catch {}
-                return @{ Success=$false; TimedOut=$true; Message="A tentativa $Method excedeu $TimeoutSeconds segundos e foi interrompida." }
+                return @{ Success=$false; TimedOut=$true; Message="A tentativa $Method excedeu $TimeoutSeconds segundos e foi interrompida.$stageMessage" }
             }
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 100
         }
         $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
-        if ($Method -in @('AddPrinter','WScript')) {
+        if ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
@@ -1134,7 +1175,7 @@ function Invoke-BoundedPrinterAttempt {
             [void][PrinterNetOnlyProcess]::CloseHandle($nativeProcess.hThread)
             [void][PrinterNetOnlyProcess]::CloseHandle($nativeProcess.hProcess)
         }
-        if ($resultPath) { Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue }
+        if ($resultPath) { Remove-Item -LiteralPath $resultPath,($resultPath + '.progress') -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -1202,8 +1243,7 @@ function Connect-UNCPrinterSafe {
         Write-AppLog -Message "Não foi possível conferir as filas locais: $($_.Exception.Message)" -Level 'AVISO'
     }
 
-    # A conexão padrão usa o mecanismo do próprio Windows. A instalação prévia de
-    # drivers via print$ é opcional e não deve alterar políticas durante este clique.
+    # Uma transferência de driver pode ser tentada uma vez, dentro do prazo total.
     $failures = @()
     $timer = [Diagnostics.Stopwatch]::StartNew()
     foreach ($candidate in $reachable) {
@@ -1242,8 +1282,27 @@ function Connect-UNCPrinterSafe {
             $failures += $failure
             Write-AppLog -Message $failure -Level 'AVISO'
             if ([string]$attempt.Message -match 'driver necessário|driver.*não pode ser recuperado|driver.*cannot be retrieved|required driver.*not available') {
-                Write-AppLog -Message "O servidor aceitou a chamada de impressão, mas o driver da fila $candidate falta no cliente." -Level 'AVISO'
-                return @{ Success=$false; Code=1797; Message="A autenticação RPC funcionou, mas o driver desta fila não pôde ser obtido do servidor. Instale no Windows 10 um pacote confiável do fabricante com o nome exato do driver e tente conectar novamente." }
+                Write-AppLog -Message "Buscando o driver preparado no servidor para $candidate." -Level 'INFO'
+                $remaining = [int][Math]::Floor(70 - $timer.Elapsed.TotalSeconds)
+                if ($remaining -le 0) { return @{ Success=$false; Code=1460; Message='Prazo da conexão esgotado antes de receber o driver.' } }
+                $transfer = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method InstallDriver -TimeoutSeconds ([Math]::Min(30,$remaining)) -NetworkCredential $networkCredential -CredentialServer $server
+                Write-AppLog -Message "Driver do servidor: $($transfer.Message)" -Level $(if ($transfer.Success) { 'SUCESSO' } else { 'AVISO' })
+                if ($transfer.Cancelled) { return @{ Success=$false; Code=1223; Message='Transferência cancelada.' } }
+                if ($transfer.TimedOut) { return @{ Success=$false; Code=1460; Message=$transfer.Message } }
+                if ($transfer.Success) {
+                    $remaining = [int][Math]::Floor(70 - $timer.Elapsed.TotalSeconds)
+                    if ($remaining -gt 0) {
+                        $retry = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method AddPrinter -TimeoutSeconds ([Math]::Min(20,$remaining)) -NetworkCredential $networkCredential -CredentialServer $server
+                        if ($retry.Cancelled) { return @{ Success=$false; Code=1223; Message='Conexão cancelada.' } }
+                        if (Wait-PrinterConnectionInstalled -UNCPath $candidate -Attempts 2) {
+                            Write-AppLog -Message "Fila $candidate confirmada após preparar o driver local." -Level 'SUCESSO'
+                            return @{ Success=$true; Code=0; ConnectedUNC=$candidate; Message='Driver instalado e impressora conectada.' }
+                        }
+                        Write-AppLog -Message "Nova tentativa após preparar o driver: $($retry.Message)" -Level 'AVISO'
+                    }
+                    return @{ Success=$false; Code=1797; DriverName=$transfer.DriverName; Message="O driver '$($transfer.DriverName)' está instalado neste PC, mas a conexão padrão ainda falhou. A alternativa por porta local pode usar esse driver sem baixar um instalador." }
+                }
+                return @{ Success=$false; Code=1797; Message="O Windows não conseguiu obter o driver pela conexão padrão. Transferência pelo EXE: $($transfer.Message)" }
             }
             $invalidName = [string]$attempt.Message -match '0x80070709|nome da impressora é inválido|nome de servidor ou de impressora é inválido|printer name is invalid'
             if ($method -eq 'AddPrinter') { $addPrinterInvalidName = [bool]$invalidName }
@@ -1505,7 +1564,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.9.7]"
+$form.Text = "Arrumar Impressora VG [v1.9.8]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -2086,7 +2145,7 @@ $btnRunFullDiag.Add_Click({
 # ==============================================================================
 $pnlPrintersTop = New-Object System.Windows.Forms.Panel
 $pnlPrintersTop.Dock = [System.Windows.Forms.DockStyle]::Top
-$pnlPrintersTop.Height = 45
+$pnlPrintersTop.Height = 82
 $tab2.Controls.Add($pnlPrintersTop)
 
 $btnRefreshPrinters = New-Object System.Windows.Forms.Button
@@ -2138,6 +2197,12 @@ $btnRemoveConn.Size = New-Object System.Drawing.Size(90, 32)
 $btnRemoveConn.Location = New-Object System.Drawing.Point(771, 6)
 $btnRemoveConn.ForeColor = [System.Drawing.Color]::DarkRed
 $pnlPrintersTop.Controls.Add($btnRemoveConn)
+
+$btnPublishDriver = New-Object System.Windows.Forms.Button
+$btnPublishDriver.Text = 'Preparar driver para outros PCs'
+$btnPublishDriver.Size = New-Object System.Drawing.Size(250, 30)
+$btnPublishDriver.Location = New-Object System.Drawing.Point(8, 44)
+$pnlPrintersTop.Controls.Add($btnPublishDriver)
 
 $dgvPrinters = New-Object System.Windows.Forms.DataGridView
 $dgvPrinters.Dock = [System.Windows.Forms.DockStyle]::Fill
@@ -2208,6 +2273,27 @@ function Refresh-PrintersGrid {
 }
 
 $btnRefreshPrinters.Add_Click({ Refresh-PrintersGrid })
+
+$btnPublishDriver.Add_Click({
+    if ($global:SimulationMode) {
+        [System.Windows.Forms.MessageBox]::Show($form, 'Modo simulação: nenhum pacote será publicado.', 'Driver do servidor') | Out-Null
+        return
+    }
+    if ($dgvPrinters.SelectedRows.Count -eq 0) { return }
+    try {
+        $name = [string]$dgvPrinters.SelectedRows[0].Cells['Name'].Value
+        $printer = Get-Printer -ErrorAction Stop | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
+        if (-not $printer.Shared -or $printer.Name -like '\\*') { throw 'Selecione uma impressora local compartilhada neste PC.' }
+        $script:cancelPrinterConnection = $false
+        Show-LoadingIndicator -Message 'Preparando o driver para os outros computadores...' -Button $btnPublishDriver
+        $published = Invoke-BoundedPrinterAttempt -UNCPath ('\\' + $env:COMPUTERNAME + '\' + $printer.ShareName) -Method PublishDriver -TimeoutSeconds 40
+        Write-AppLog -Message "Preparar driver: $($published.Message)" -Level $(if ($published.Success) { 'SUCESSO' } else { 'ERRO' })
+        [System.Windows.Forms.MessageBox]::Show($form, $published.Message, 'Driver do servidor') | Out-Null
+    } catch {
+        Write-AppLog -Message "Preparar driver: $($_.Exception.Message)" -Level 'ERRO'
+        [System.Windows.Forms.MessageBox]::Show($form, $_.Exception.Message, 'Driver do servidor') | Out-Null
+    } finally { Hide-LoadingIndicator -Button $btnPublishDriver }
+})
 
 # Ação: Definir como Padrão
 $btnSetDefault.Add_Click({
@@ -4585,6 +4671,12 @@ $tabControl.Add_SelectedIndexChanged({
     if ($tabControl.SelectedTab -eq $tab6) { Update-SpoolTabStatus }
     if ($tabControl.SelectedTab -eq $tab7) { Update-RDPDiagnostics }
 })
+
+$interfacePath = if ($PrinterConnectionPath) { Join-Path (Split-Path -Parent $PrinterConnectionPath) 'INTERFACE.ps1' } else { Join-Path $PSScriptRoot 'scripts\INTERFACE.ps1' }
+if (Test-Path -LiteralPath $interfacePath) {
+    . $interfacePath
+    Set-PrinterAppLayout
+}
 
 $form.Add_Shown({
 
