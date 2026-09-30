@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $sourcePath = Join-Path $root 'src\scripts\CORRIGIR-ACESSO-REDE-24H2.ps1'
 $restorePath = Join-Path $root 'src\scripts\RESTAURAR-ACESSO-REDE.ps1'

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $sourcePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'src\AssistenteImpressoras.ps1'
 $tokens = $null
 $errors = $null
@@ -42,86 +42,34 @@ if (-not (Test-PrinterConnectionInstalled -UNCPath '\\SERVIDOR\Fila')) {
     throw 'A verificacao nao reconheceu ServerName e ShareName.'
 }
 
-$script:logs = New-Object System.Collections.ArrayList
-function Write-AppLog { param($Message, $Level) [void]$script:logs.Add("$Level $Message") }
-function Test-TcpPortSafe { param($HostOrIp, $Port, $TimeoutMs) return $true }
-function Start-Sleep { param($Milliseconds) }
+
+$script:logs=New-Object Collections.ArrayList
+function Write-AppLog {param($Message,$Level) [void]$script:logs.Add($Message)}
+function Test-TcpPortSafe {param($HostOrIp,$Port,$TimeoutMs) return $true}
+$script:fixturePrinters=@()
+function Get-InstalledPrintersWmi {return $script:fixturePrinters}
 function Invoke-BoundedPrinterAttempt {
-    param($UNCPath, $Method, $TimeoutSeconds)
-    $script:attempts++
-    if ($script:timeoutFirst) { return @{ Success=$false; TimedOut=$true; Message='Prazo esgotado no teste.' } }
-    if ($script:invalidName) { return @{ Success=$false; Message='O nome da impressora é inválido. (HRESULT: 0x80070709)' } }
-    if ($script:allowIp -and $UNCPath -eq '\\10.0.0.4\Fila' -and $Method -eq 'AddPrinter') {
-        $script:installedIp = $true
-    }
-    if ($script:allowWScript -and $UNCPath -eq '\\SERVIDOR\Fila' -and $Method -eq 'WScript') {
-        $script:installedWScript = $true
-    }
-    return @{ Success=($Method -eq 'PrintUI'); Message='Método terminou no teste.' }
+ param($UNCPath,$Method,$TimeoutSeconds,$NetworkCredential,$CredentialServer)
+ $script:attempts++
+ if($Method -ne 'Cascade'){throw 'Interface não invocou a cascata.'}
+ switch($script:scenario){
+  timeout {return @{Success=$false;TimedOut=$true;Message='Prazo atingido'}}
+  cancel {return @{Success=$false;Cancelled=$true;Message='Cancelado'}}
+  default {return @{Success=$true;QueueInstalled=$true;ConnectedUNC=$UNCPath;Cascaded=$true;Message='Fixture'}}
+ }
 }
-function Test-PrinterConnectionInstalled {
-    param($UNCPath)
-    return (($script:installedIp -and $UNCPath -eq '\\10.0.0.4\Fila') -or
-        ($script:installedWScript -and $UNCPath -eq '\\SERVIDOR\Fila'))
+$global:SimulationMode=$false
+$script:attempts=0;$script:scenario='false-success'
+$result=Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila'
+if($result.Success -or $script:attempts -ne 1){throw 'Sucesso do worker sem fila foi aceito.'}
+$script:fixturePrinters=@([pscustomobject]@{Name='Fila local';Network=$false;PortName='\\SERVIDOR\Fila'})
+$script:attempts=0;$script:scenario='success'
+$result=Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila'
+if(-not $result.Success -or $script:attempts -ne 1){throw 'Fila UNC exata não foi confirmada.'}
+foreach($script:scenario in @('timeout','cancel')){
+ $script:attempts=0
+ $result=Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila'
+ $code=if($script:scenario -eq 'timeout'){1460}else{1223}
+ if($result.Success -or $result.Code -ne $code -or $script:attempts -ne 1){throw 'Worker foi repetido após timeout/cancelamento.'}
 }
-
-$global:SimulationMode = $false
-$script:allowIp = $false
-$script:installedIp = $false
-$script:installedWScript = $false
-$script:allowWScript = $false
-$script:attempts = 0
-$script:timeoutFirst = $false
-$script:invalidName = $false
-$falseSuccess = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila' -AlternateHost '10.0.0.4'
-if ($falseSuccess.Success) { throw 'PrintUI codigo 0 foi aceito sem impressora instalada.' }
-
-$script:allowIp = $true
-$script:installedIp = $false
-$script:attempts = 0
-$ipSuccess = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila' -AlternateHost '10.0.0.4'
-if (-not $ipSuccess.Success -or $ipSuccess.ConnectedUNC -cne '\\10.0.0.4\Fila') {
-    throw 'A segunda tentativa pelo IP nao foi confirmada.'
-}
-
-$script:allowIp = $false
-$script:installedIp = $false
-$script:attempts = 0
-$script:timeoutFirst = $true
-$timeout = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila' -AlternateHost '10.0.0.4'
-if ($timeout.Success -or $timeout.Code -ne 1460 -or $script:attempts -ne 1) {
-    throw 'A tentativa com prazo esgotado foi repetida ou reportada como sucesso.'
-}
-$script:timeoutFirst = $false
-
-$script:invalidName = $true
-$script:attempts = 0
-$invalidName = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila'
-if ($invalidName.Success -or $invalidName.Code -ne 1801 -or $script:attempts -ne 2) {
-    throw 'O erro 0x80070709 não interrompeu a tentativa PrintUI redundante.'
-}
-$script:attempts = 0
-$invalidByNameAndIp = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila' -AlternateHost '10.0.0.4'
-if ($invalidByNameAndIp.Success -or $invalidByNameAndIp.Code -ne 1801 -or $script:attempts -ne 4) {
-    throw 'A falha 0x80070709 não foi conferida pelo nome e IP sem abrir PrintUI.'
-}
-$script:invalidName = $false
-
-$script:allowWScript = $true
-$script:installedWScript = $false
-$script:attempts = 0
-$wscriptSuccess = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila'
-if (-not $wscriptSuccess.Success -or $wscriptSuccess.ConnectedUNC -cne '\\SERVIDOR\Fila' -or $script:attempts -ne 2) {
-    throw 'A conexão por WScript não foi preservada como segundo método.'
-}
-$script:allowWScript = $false
-$script:installedWScript = $false
-
-$script:existingLocal = $true
-$script:allowIp = $false
-$localSuccess = Connect-UNCPrinterSafe -UNCPath '\\SERVIDOR\Fila'
-if (-not $localSuccess.Success -or -not $localSuccess.LocalPort -or $localSuccess.ConnectedUNC -ne 'Fila em SERVIDOR') {
-    throw 'Uma fila local existente na porta UNC nao foi reconhecida.'
-}
-
-Write-Output 'OK: caminho por IP, WScript preservado, 0x80070709 encerra PrintUI redundante, sucesso falso rejeitado, prazo esgotado sem repeticao e fila local reconhecida.'
+'OK: UNC exato, nome parecido rejeitado, confirmação independente e cascata sem repetição após timeout/cancelamento.'

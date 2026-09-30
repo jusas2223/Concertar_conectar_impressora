@@ -10,13 +10,14 @@ $scripts = @(
     @{ Path = (Join-Path $root 'src\scripts\INSTALAR-PORTA-LOCAL.ps1'); Resource = 'AssistenteImpressoras.INSTALAR-PORTA-LOCAL.ps1' },
     @{ Path = (Join-Path $root 'src\scripts\CONECTAR-IMPRESSORA.ps1'); Resource = 'AssistenteImpressoras.CONECTAR-IMPRESSORA.ps1' },
     @{ Path = (Join-Path $root 'src\scripts\DRIVER-DO-SERVIDOR.ps1'); Resource = 'AssistenteImpressoras.DRIVER-DO-SERVIDOR.ps1' },
+    @{ Path = (Join-Path $root 'src\scripts\IMPRESSAO-COMUM.ps1'); Resource = 'AssistenteImpressoras.IMPRESSAO-COMUM.ps1' },
     @{ Path = (Join-Path $root 'src\scripts\INTERFACE.ps1'); Resource = 'AssistenteImpressoras.INTERFACE.ps1' },
     @{ Path = (Join-Path $root 'Diagnostico_Compartilhamento.ps1'); Resource = 'AssistenteImpressoras.Diagnostico_Compartilhamento.ps1' }
 )
 
 if (-not (Test-Path -LiteralPath $exePath)) { throw 'Compile o EXE antes deste teste.' }
 $assembly = [Reflection.Assembly]::LoadFile($exePath)
-if ($assembly.GetName().Version.ToString() -ne '1.9.9.0') { throw 'Versao do EXE incorreta.' }
+if ($assembly.GetName().Version.ToString() -ne '1.10.0.0') { throw 'Versao do EXE incorreta.' }
 $launcherType = $assembly.GetType('AssistenteImpressorasLauncher.Program', $true)
 $quoteMethod = $launcherType.GetMethod('Quote', [Reflection.BindingFlags]'NonPublic,Static')
 if (-not $quoteMethod -or $quoteMethod.Invoke($null, @('T:\')) -cne '"T:\\"') {
@@ -53,4 +54,4 @@ try {
     if ([IO.Directory]::Exists($tempDirectory)) { [IO.Directory]::Delete($tempDirectory) }
 }
 
-Write-Output 'OK: versao, script principal, nove rotinas incorporadas e chamada com caminho contendo espacos.'
+Write-Output 'OK: versão, script principal, dez rotinas incorporadas e chamada com caminho contendo espaços.'

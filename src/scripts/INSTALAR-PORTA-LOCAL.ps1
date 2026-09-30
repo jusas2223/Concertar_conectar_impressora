@@ -1,9 +1,15 @@
-param(
-    [Parameter(Mandatory=$true)][string]$RequestPath,
-    [Parameter(Mandatory=$true)][string]$ResultPath
+﻿param(
+    [string]$RequestPath = '',
+    [string]$ResultPath = '',
+    [string]$Server = '',
+    [string]$ShareName = '',
+    [string]$DriverName = '',
+    [string]$QueueName = '',
+    [string]$InfPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'IMPRESSAO-COMUM.ps1')
 $result = @{ Success = $false; Message = 'A instalação não foi concluída.' }
 $stage = 'Ler dados da instalação'
 $portMethod = 'Add-PrinterPort'
@@ -55,11 +61,16 @@ public static class LocalPortMonitorBridge {
 }
 
 try {
-    $request = Import-Clixml -LiteralPath $RequestPath -ErrorAction Stop
-    $unc = [string]$request.UNCPath
-    $driver = ([string]$request.DriverName).Trim()
-    $queue = ([string]$request.QueueName).Trim()
-    $inf = [string]$request.InfPath
+    if($RequestPath){
+        $request = Import-Clixml -LiteralPath $RequestPath -ErrorAction Stop
+        $address=Resolve-PrinterUNC -UNCPath ([string]$request.UNCPath)
+        $DriverName=[string]$request.DriverName; $QueueName=[string]$request.QueueName; $InfPath=[string]$request.InfPath
+    }else{$address=Resolve-PrinterUNC -Server $Server -ShareName $ShareName}
+    $unc=$address.UNCPath
+    $driver=$DriverName.Trim()
+    $queue=$QueueName.Trim()
+    if(-not $queue){$queue=$address.ShareName+' em '+$address.Server}
+    $inf=$InfPath
 
     if ($unc -notmatch '^\\\\[^\\]+\\[^\\]+$') { throw 'Caminho da impressora inválido. Use \\SERVIDOR\Fila.' }
     if (-not $driver) { throw 'Informe o nome exato do driver para o Windows 10.' }
@@ -86,11 +97,8 @@ try {
         $installedDriver = Get-PrinterDriver -Name $driver -ErrorAction SilentlyContinue
         if (-not $installedDriver -and $inf) {
             $stage = 'Instalar pacote INF do driver'
-            $pnpOutput = & pnputil.exe /add-driver $inf 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "O Windows recusou o pacote INF (código $LASTEXITCODE): $($pnpOutput -join ' ')"
-            }
-            Add-PrinterDriver -Name $driver -ErrorAction Stop
+            $injected=Invoke-PrinterPnPInstall -Directory (Split-Path -Parent $inf) -DriverName $driver -InfName ([IO.Path]::GetFileName($inf))
+            if(-not $injected.Success){throw $injected.Message}
             $installedDriver = Get-PrinterDriver -Name $driver -ErrorAction SilentlyContinue
         }
         if (-not $installedDriver) {
@@ -119,13 +127,8 @@ try {
         try {
             $stage = 'Criar fila com driver e porta local'
             Add-Printer -Name $queue -DriverName $driver -PortName $unc -ErrorAction Stop
-            $createdQueue = $null
             $stage = 'Confirmar fila criada no Windows'
-            for ($attempt = 0; $attempt -lt 6; $attempt++) {
-                $createdQueue = Get-Printer -Name $queue -ErrorAction SilentlyContinue
-                if ($createdQueue) { break }
-                if ($attempt -lt 5) { Start-Sleep -Milliseconds 500 }
-            }
+            $createdQueue=Wait-ExactPrinter -UNCPath $unc -QueueName $queue -DriverName $driver -Seconds 10
             if ([string]$createdQueue.PortName -ine $unc -or [string]$createdQueue.DriverName -ine $driver) {
                 throw "O Windows criou a fila com porta ou driver diferente do solicitado (porta='$($createdQueue.PortName)', driver='$($createdQueue.DriverName)')."
             }
@@ -150,6 +153,7 @@ try {
     }
 }
 
+if(-not $ResultPath){return $result}
 try {
     $result | Export-Clixml -LiteralPath $ResultPath -Force -ErrorAction Stop
 } catch {

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $installer = Join-Path $root 'src\scripts\INSTALAR-PORTA-LOCAL.ps1'
 $tempDirectory = Join-Path $env:TEMP ('PrinterLocalPortTest_' + [Guid]::NewGuid().ToString('N'))

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $fixPath = Join-Path $root 'src\scripts\CORRIGIR-ERRO-IMPRESSORA.ps1'
 $restorePath = Join-Path $root 'src\scripts\RESTAURAR-ERRO-IMPRESSORA.ps1'

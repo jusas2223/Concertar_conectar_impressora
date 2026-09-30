@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $failed = @()
 $scripts = Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'verify-*.ps1' -File | Sort-Object Name
 foreach ($script in $scripts) {

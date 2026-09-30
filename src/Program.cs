@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Arrumar Impressora VG")]
 [assembly: AssemblyDescription("Diagnostico e configuracao de impressoras")]
 [assembly: AssemblyProduct("Arrumar Impressora VG")]
-[assembly: AssemblyVersion("1.9.9.0")]
-[assembly: AssemblyFileVersion("1.9.9.0")]
+[assembly: AssemblyVersion("1.10.0.0")]
+[assembly: AssemblyFileVersion("1.10.0.0")]
 
 namespace AssistenteImpressorasLauncher
 {
@@ -29,6 +29,19 @@ namespace AssistenteImpressorasLauncher
         [STAThread]
         private static int Main(string[] args)
         {
+            var principal = new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent());
+            if (!principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+            {
+                try
+                {
+                    var elevated = new ProcessStartInfo(Assembly.GetExecutingAssembly().Location);
+                    elevated.UseShellExecute = true;
+                    elevated.Verb = "runas";
+                    Process.Start(elevated);
+                    return 0;
+                }
+                catch (System.ComponentModel.Win32Exception) { return 1223; }
+            }
             string workDirectory = null;
             try
             {
@@ -43,6 +56,7 @@ namespace AssistenteImpressorasLauncher
                 string localPortPath = ExtractResource(LocalPortResource, workDirectory, "INSTALAR-PORTA-LOCAL.ps1");
                 string connectionPath = ExtractResource(ConnectionResource, workDirectory, "CONECTAR-IMPRESSORA.ps1");
                 ExtractResource(ServerDriverResource, workDirectory, "DRIVER-DO-SERVIDOR.ps1");
+                ExtractResource("AssistenteImpressoras.IMPRESSAO-COMUM.ps1", workDirectory, "IMPRESSAO-COMUM.ps1");
                 ExtractResource(InterfaceResource, workDirectory, "INTERFACE.ps1");
                 string compatibilityDiagnosisPath = ExtractResource(CompatibilityDiagnosisResource, workDirectory, "Diagnostico_Compartilhamento.ps1");
 

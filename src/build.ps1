@@ -26,12 +26,13 @@ $networkRestore = Join-Path $PSScriptRoot 'scripts\RESTAURAR-ACESSO-REDE.ps1'
 $localPortInstall = Join-Path $PSScriptRoot 'scripts\INSTALAR-PORTA-LOCAL.ps1'
 $connectionInstall = Join-Path $PSScriptRoot 'scripts\CONECTAR-IMPRESSORA.ps1'
 $serverDriver = Join-Path $PSScriptRoot 'scripts\DRIVER-DO-SERVIDOR.ps1'
+$commonPrinter = Join-Path $PSScriptRoot 'scripts\IMPRESSAO-COMUM.ps1'
 $interface = Join-Path $PSScriptRoot 'scripts\INTERFACE.ps1'
 $compatibilityDiagnosis = Join-Path (Split-Path -Parent $PSScriptRoot) 'Diagnostico_Compartilhamento.ps1'
-foreach ($required in @($printerFix, $printerRestore, $networkFix, $networkRestore, $localPortInstall, $connectionInstall, $serverDriver, $interface, $compatibilityDiagnosis)) {
+foreach ($required in @($printerFix, $printerRestore, $networkFix, $networkRestore, $localPortInstall, $connectionInstall, $serverDriver, $commonPrinter, $interface, $compatibilityDiagnosis)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Recurso ausente: $required" }
 }
-$parseInputs = @($scriptFile, $printerFix, $printerRestore, $networkFix, $networkRestore, $localPortInstall, $connectionInstall, $serverDriver, $interface, $compatibilityDiagnosis)
+$parseInputs = @($scriptFile, $printerFix, $printerRestore, $networkFix, $networkRestore, $localPortInstall, $connectionInstall, $serverDriver, $commonPrinter, $interface, $compatibilityDiagnosis)
 foreach ($inputPath in $parseInputs) {
     $parseErrors = $null
     $tokens = $null
@@ -47,6 +48,6 @@ $connectionResource = '/resource:' + $connectionInstall + ',AssistenteImpressora
 $serverDriverResource = '/resource:' + $serverDriver + ',AssistenteImpressoras.DRIVER-DO-SERVIDOR.ps1'
 $interfaceResource = '/resource:' + $interface + ',AssistenteImpressoras.INTERFACE.ps1'
 $compatibilityResource = '/resource:' + $compatibilityDiagnosis + ',AssistenteImpressoras.Diagnostico_Compartilhamento.ps1'
-& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 /reference:System.Windows.Forms.dll $resourceArgument $printerResource $printerRestoreResource $networkResource $restoreResource $localPortResource $connectionResource $serverDriverResource $interfaceResource $compatibilityResource ('/out:' + $OutputPath) $source
+& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 /reference:System.Windows.Forms.dll $resourceArgument $printerResource $printerRestoreResource $networkResource $restoreResource $localPortResource $connectionResource $serverDriverResource ('/resource:' + $commonPrinter + ',AssistenteImpressoras.IMPRESSAO-COMUM.ps1') $interfaceResource $compatibilityResource ('/out:' + $OutputPath) $source
 if ($LASTEXITCODE -ne 0) { throw "Falha na compilacao: $LASTEXITCODE" }
 Write-Output $OutputPath

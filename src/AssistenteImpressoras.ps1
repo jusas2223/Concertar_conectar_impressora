@@ -1102,7 +1102,7 @@ function Offer-Win10LocalPortFallback {
 function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
-        [ValidateSet('AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','LocalPort')][string]$Method,
+        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort')][string]$Method,
         [int]$TimeoutSeconds = 25,
         [pscredential]$NetworkCredential,
         [string]$CredentialServer = '',
@@ -1111,6 +1111,17 @@ function Invoke-BoundedPrinterAttempt {
     $resultPath = ''
     $process = $null
     $nativeProcess = $null
+    function Stop-PrinterWorkerTree {
+        param([int]$WorkerId)
+        if($WorkerId -le 0){return}
+        # Includes PnPUtil spawned by the worker; do not leave an installer running
+        # after cancelling only its PowerShell parent.
+        $killer=$null
+        try{
+            $killer=Start-Process -FilePath (Join-Path $env:WINDIR 'System32\taskkill.exe') -ArgumentList ('/PID '+$WorkerId+' /T /F') -WindowStyle Hidden -PassThru -ErrorAction Stop
+            if(-not $killer.WaitForExit(1500)){$killer.Kill()}
+        }catch{}finally{if($killer){$killer.Dispose()}}
+    }
     try {
         if ($UNCPath -match '"') { return @{ Success=$false; Message='O caminho contém aspas inválidas.' } }
         if ($Method -eq 'LocalPort') {
@@ -1121,7 +1132,7 @@ function Invoke-BoundedPrinterAttempt {
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -RequestPath "{1}" -ResultPath "{2}"' -f $LocalPortInstallPath,$LocalPortRequestPath,$resultPath
             $executable = Join-Path $PSHOME 'powershell.exe'
-        } elseif ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver')) {
+        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient')) {
             if (-not $PrinterConnectionPath -or -not (Test-Path -LiteralPath $PrinterConnectionPath)) {
                 return @{ Success=$false; Message='Rotina interna de conexão não encontrada no EXE.' }
             }
@@ -1157,6 +1168,7 @@ function Invoke-BoundedPrinterAttempt {
             if ($exited) { break }
             if ($script:cancelPrinterConnection) {
                 try {
+                    Stop-PrinterWorkerTree -WorkerId $(if($nativeProcess){$nativeProcess.dwProcessId}else{$process.Id})
                     if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1223) }
                     else { $process.Kill(); [void]$process.WaitForExit(2000) }
                 } catch {}
@@ -1168,6 +1180,7 @@ function Invoke-BoundedPrinterAttempt {
                     try { $stageMessage = ' Etapa: ' + [IO.File]::ReadAllText($resultPath + '.progress') } catch {}
                 }
                 try {
+                    Stop-PrinterWorkerTree -WorkerId $(if($nativeProcess){$nativeProcess.dwProcessId}else{$process.Id})
                     if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1460) }
                     else { $process.Kill(); [void]$process.WaitForExit(2000) }
                 } catch {}
@@ -1177,7 +1190,7 @@ function Invoke-BoundedPrinterAttempt {
             Start-Sleep -Milliseconds 100
         }
         $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
-        if ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver','LocalPort')) {
+        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
@@ -1197,145 +1210,29 @@ function Invoke-BoundedPrinterAttempt {
 }
 
 function Connect-UNCPrinterSafe {
-    param([string]$UNCPath, [string]$AlternateHost = "")
-
-    Write-AppLog -Message "Iniciando conexao com impressora UNC: $UNCPath" -Level "INFO"
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULACAO] Nenhuma impressora foi conectada: $UNCPath" -Level "SIMULACAO"
-        return @{ Success=$true; Simulated=$true; Code=0; Message="Conexao simulada." }
+    param([string]$UNCPath,[string]$AlternateHost='')
+    if($global:SimulationMode){return @{Success=$true;Simulated=$true;Code=0;Message='Conexão simulada; nenhuma alteração ou job enviado.'}}
+    $cleanUNC=$UNCPath.Trim()
+    if(-not $cleanUNC.StartsWith('\\')){return @{Success=$false;Code=87;Message='Caminho UNC inválido.'}}
+    $parts=$cleanUNC.Substring(2).Split([char]92)
+    if($parts.Length -ne 2 -or -not $parts[0] -or -not $parts[1]){return @{Success=$false;Code=87;Message='Caminho UNC inválido.'}}
+    $server=$parts[0]
+    if(-not(Test-TcpPortSafe -HostOrIp $server -Port 445 -TimeoutMs 1500)){return @{Success=$false;Code=53;Message='Servidor não responde em SMB 445.'}}
+    $credential=if($script:authenticatedPrinterServer -ieq $server){$script:authenticatedPrinterCredential}else{$null}
+    Write-AppLog -Message "Iniciando cascata nativa/driver/porta local para $cleanUNC." -Level INFO
+    $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server
+    foreach($step in @($attempt.History)){Write-AppLog -Message ([string]$step) -Level INFO}
+    if($attempt.Cancelled){return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada; confira a fila antes de repetir.'}}
+    if($attempt.TimedOut){return @{Success=$false;Code=1460;Cascaded=$true;Message=$attempt.Message}}
+    if($attempt.Success){
+        $verified=Test-PrinterShareInstalled -UNCPath $cleanUNC -InstalledPrinters (Get-InstalledPrintersWmi)
+        if(-not $attempt.QueueInstalled -or -not $verified){return @{Success=$false;Code=31;Cascaded=$true;Message='Worker terminou, mas a fila não foi confirmada neste usuário.'}}
+        Write-AppLog -Message $attempt.Message -Level SUCESSO
+    }else{
+        if(-not $attempt.Code){$attempt.Code=if($attempt.NativeCode){$attempt.NativeCode}else{31}}
+        Write-AppLog -Message ("Falha da cascata: "+$attempt.Message) -Level ERRO
     }
-
-    $cleanUNC = $UNCPath.Trim()
-    if ($cleanUNC -notmatch '^\\\\([^\\]+)\\([^\\]+)$') {
-        return @{ Success=$false; Code=87; Message="Caminho UNC invalido: $cleanUNC" }
-    }
-    $server = $matches[1]
-    $share = $matches[2]
-    $networkCredential = if ($script:authenticatedPrinterServer -ieq $server) { $script:authenticatedPrinterCredential } else { $null }
-    if ($networkCredential) {
-        Write-AppLog -Message "Conexão de impressão em $server usará credenciais de rede de $($networkCredential.UserName)." -Level 'INFO'
-    } else {
-        Write-AppLog -Message "Conexão de impressão em $server sem credenciais explícitas do servidor; identidade local: $env:USERDOMAIN\$env:USERNAME." -Level 'AVISO'
-    }
-
-    $candidates = @($cleanUNC)
-    if (-not $AlternateHost -and $server -notmatch '^\d{1,3}(\.\d{1,3}){3}$') {
-        try {
-            $resolved = [System.Net.Dns]::GetHostAddresses($server) |
-                Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and $_.IPAddressToString -notlike '127.*' } |
-                Select-Object -First 1
-            if ($resolved) { $AlternateHost = $resolved.IPAddressToString }
-        } catch {}
-    }
-    if ($AlternateHost -and $AlternateHost -ne $server -and
-        $AlternateHost -match '^\d{1,3}(\.\d{1,3}){3}$') {
-        $candidates += ('\\' + $AlternateHost + '\' + $share)
-    }
-
-    $reachable = @($candidates | Where-Object {
-        $hostPart = ([regex]::Match($_, '^\\\\([^\\]+)\\')).Groups[1].Value
-        if (Test-TcpPortSafe -HostOrIp $hostPart -Port 445 -TimeoutMs 1500) {
-            Write-AppLog -Message "SMB 445 acessivel em $hostPart." -Level "INFO"
-            $true
-        } else {
-            Write-AppLog -Message "SMB 445 inacessivel em $hostPart." -Level "AVISO"
-            $false
-        }
-    })
-    if ($reachable.Count -eq 0) {
-        return @{ Success=$false; Code=53; Message="O servidor nao responde na porta SMB 445 pelo nome nem pelo IP. Verifique o compartilhamento e a rede." }
-    }
-    if (Test-PrinterConnectionInstalled -UNCPath $cleanUNC) {
-        return @{ Success=$true; Code=0; ConnectedUNC=$cleanUNC; Message="Impressora ja conectada neste usuario." }
-    }
-    try {
-        $localQueue = Get-InstalledPrintersWmi |
-            Where-Object { -not $_.Network -and $candidates -icontains [string]$_.PortName } |
-            Select-Object -First 1
-        if ($localQueue) {
-            Write-AppLog -Message "Fila local '$($localQueue.Name)' já usa a porta $($localQueue.PortName)." -Level 'INFO'
-            return @{ Success=$true; Code=0; ConnectedUNC=[string]$localQueue.Name; PortUNC=[string]$localQueue.PortName; LocalPort=$true; Message='Fila local já instalada neste PC.' }
-        }
-    } catch {
-        Write-AppLog -Message "Não foi possível conferir as filas locais: $($_.Exception.Message)" -Level 'AVISO'
-    }
-
-    # Uma transferência de driver pode ser tentada uma vez, dentro do prazo total.
-    $failures = @()
-    $timer = [Diagnostics.Stopwatch]::StartNew()
-    foreach ($candidate in $reachable) {
-        $addPrinterInvalidName = $false
-        foreach ($method in @('AddPrinter','WScript','PrintUI')) {
-            if ($script:cancelPrinterConnection) {
-                Write-AppLog -Message "Conexão cancelada antes de tentar $method em $candidate." -Level 'AVISO'
-                return @{ Success=$false; Code=1223; Message='Conexão cancelada.' }
-            }
-            $remaining = [int][Math]::Floor(70 - $timer.Elapsed.TotalSeconds)
-            if ($remaining -le 0) {
-                Write-AppLog -Message "Prazo total de 70 segundos atingido para $cleanUNC." -Level 'AVISO'
-                return @{ Success=$false; Code=1460; Message='A conexão excedeu 70 segundos e foi interrompida. Confira o Spooler no computador que compartilha a impressora.' }
-            }
-            $perAttempt = [Math]::Min($(if ($method -eq 'PrintUI') { 25 } else { 20 }), $remaining)
-            Write-AppLog -Message "Tentando $method em $candidate (limite: $perAttempt segundos)." -Level 'INFO'
-            $attempt = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method $method -TimeoutSeconds $perAttempt -NetworkCredential $networkCredential -CredentialServer $server
-            if ($attempt.Cancelled) {
-                Write-AppLog -Message "Conexão cancelada em $candidate." -Level 'AVISO'
-                return @{ Success=$false; Code=1223; Message='Conexão cancelada.' }
-            }
-            if ($attempt.TimedOut) {
-                Write-AppLog -Message "Tempo esgotado em $candidate via ${method}: $($attempt.Message)" -Level 'AVISO'
-                return @{ Success=$false; Code=1460; Message='O Windows demorou demais para conectar. A tentativa foi interrompida; verifique a fila e o Spooler no computador que compartilha a impressora.' }
-            }
-            $confirmationAttempts = if ($attempt.Success) { 6 } else { 2 }
-            if (Wait-PrinterConnectionInstalled -UNCPath $candidate -Attempts $confirmationAttempts) {
-                Write-AppLog -Message "Conexão $candidate confirmada no Windows via $method." -Level 'SUCESSO'
-                return @{ Success=$true; Code=0; ConnectedUNC=$candidate; Message='Impressora conectada e confirmada.' }
-            }
-            if ($script:cancelPrinterConnection) {
-                Write-AppLog -Message "Conexão cancelada após $method em $candidate." -Level 'AVISO'
-                return @{ Success=$false; Code=1223; Message='Conexão cancelada.' }
-            }
-            $failure = "$method em ${candidate}: $($attempt.Message) A fila não foi registrada."
-            $failures += $failure
-            Write-AppLog -Message $failure -Level 'AVISO'
-            if ([string]$attempt.Message -match 'driver necessário|driver.*não pode ser recuperado|driver.*cannot be retrieved|required driver.*not available') {
-                Write-AppLog -Message "Buscando o driver preparado no servidor para $candidate." -Level 'INFO'
-                $remaining = [int][Math]::Floor(70 - $timer.Elapsed.TotalSeconds)
-                if ($remaining -le 0) { return @{ Success=$false; Code=1460; Message='Prazo da conexão esgotado antes de receber o driver.' } }
-                $transfer = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method InstallDriver -TimeoutSeconds ([Math]::Min(30,$remaining)) -NetworkCredential $networkCredential -CredentialServer $server
-                Write-AppLog -Message "Driver do servidor: $($transfer.Message)" -Level $(if ($transfer.Success) { 'SUCESSO' } else { 'AVISO' })
-                if ($transfer.Cancelled) { return @{ Success=$false; Code=1223; Message='Transferência cancelada.' } }
-                if ($transfer.TimedOut) { return @{ Success=$false; Code=1460; Message=$transfer.Message } }
-                if ($transfer.Success) {
-                    $remaining = [int][Math]::Floor(70 - $timer.Elapsed.TotalSeconds)
-                    if ($remaining -gt 0) {
-                        $retry = Invoke-BoundedPrinterAttempt -UNCPath $candidate -Method AddPrinter -TimeoutSeconds ([Math]::Min(20,$remaining)) -NetworkCredential $networkCredential -CredentialServer $server
-                        if ($retry.Cancelled) { return @{ Success=$false; Code=1223; Message='Conexão cancelada.' } }
-                        if (Wait-PrinterConnectionInstalled -UNCPath $candidate -Attempts 2) {
-                            Write-AppLog -Message "Fila $candidate confirmada após preparar o driver local." -Level 'SUCESSO'
-                            return @{ Success=$true; Code=0; ConnectedUNC=$candidate; Message='Driver instalado e impressora conectada.' }
-                        }
-                        Write-AppLog -Message "Nova tentativa após preparar o driver: $($retry.Message)" -Level 'AVISO'
-                    }
-                    return @{ Success=$false; Code=1797; DriverName=$transfer.DriverName; Message="O driver '$($transfer.DriverName)' está instalado neste PC, mas a conexão padrão ainda falhou. A alternativa por porta local pode usar esse driver sem baixar um instalador." }
-                }
-                return @{ Success=$false; Code=1797; Message="O Windows não conseguiu obter o driver pela conexão padrão. Transferência pelo EXE: $($transfer.Message)" }
-            }
-            $invalidName = [string]$attempt.Message -match '0x80070709|nome da impressora é inválido|nome de servidor ou de impressora é inválido|printer name is invalid'
-            if ($method -eq 'AddPrinter') { $addPrinterInvalidName = [bool]$invalidName }
-            if ($method -eq 'WScript' -and $addPrinterInvalidName -and $invalidName) {
-                Write-AppLog -Message "Add-Printer e WScript retornaram nome inválido em $candidate. PrintUI não será repetido para este endereço; confirme o driver local e tente a porta local." -Level 'AVISO'
-                break
-            }
-        }
-    }
-
-    $reason = ($failures | Select-Object -Last 2) -join '; '
-    Write-AppLog -Message "Falha confirmada para $cleanUNC. $reason" -Level "ERRO"
-    if (($failures -join ' ') -match '0x80070709|nome da impressora é inválido|printer name is invalid') {
-        return @{ Success=$false; Code=1801; Message="O Windows rejeitou a conexão com 0x80070709. O compartilhamento pode existir, mas o cliente não conseguiu registrar a fila ou obter o driver. Use o diagnóstico e a instalação por porta local." }
-    }
-    return @{ Success=$false; Code=-1; Message="O Windows não registrou $cleanUNC. Confira o nome da fila, as permissões e o Spooler no computador que a compartilha. Detalhes no log." }
+    return $attempt
 }
 
 function Ensure-RemotePrinterConnectedAndDriverInstalled {
@@ -1581,7 +1478,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.9.9]"
+$form.Text = "Arrumar Impressora VG [v1.10.0]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -2216,7 +2113,7 @@ $btnRemoveConn.ForeColor = [System.Drawing.Color]::DarkRed
 $pnlPrintersTop.Controls.Add($btnRemoveConn)
 
 $btnPublishDriver = New-Object System.Windows.Forms.Button
-$btnPublishDriver.Text = 'Preparar driver para outros PCs'
+$btnPublishDriver.Text = 'Preparar host e driver'
 $btnPublishDriver.Size = New-Object System.Drawing.Size(250, 30)
 $btnPublishDriver.Location = New-Object System.Drawing.Point(8, 44)
 $pnlPrintersTop.Controls.Add($btnPublishDriver)
@@ -2303,7 +2200,7 @@ $btnPublishDriver.Add_Click({
         if (-not $printer.Shared -or $printer.Name -like '\\*') { throw 'Selecione uma impressora local compartilhada neste PC.' }
         $script:cancelPrinterConnection = $false
         Show-LoadingIndicator -Message 'Preparando o driver para os outros computadores...' -Button $btnPublishDriver
-        $published = Invoke-BoundedPrinterAttempt -UNCPath ('\\' + $env:COMPUTERNAME + '\' + $printer.ShareName) -Method PublishDriver -TimeoutSeconds 40
+        $published = Invoke-BoundedPrinterAttempt -UNCPath ('\\' + $env:COMPUTERNAME + '\' + $printer.ShareName) -Method PrepareHost -TimeoutSeconds 120
         Write-AppLog -Message "Preparar driver: $($published.Message)" -Level $(if ($published.Success) { 'SUCESSO' } else { 'ERRO' })
         [System.Windows.Forms.MessageBox]::Show($form, $published.Message, 'Driver do servidor') | Out-Null
     } catch {
@@ -3622,7 +3519,7 @@ $btnLocalPortSelected.Add_Click({
     if (-not $localResult -or -not $localResult.Success) { return }
     $localName = [string]$localResult.ConnectedUNC
     if ($chkNetDefault.Checked) { Set-DefaultPrinterSafe -PrinterName $localName | Out-Null }
-    if ($chkNetTestPage.Checked) { Invoke-PrintUICommand -Arguments ('/k /n "' + $localName + '"') | Out-Null }
+    if ($chkNetTestPage.Checked -and -not $result.JobValidated) { Invoke-PrintUICommand -Arguments ('/k /n "' + $localName + '"') | Out-Null }
     Refresh-PrintersGrid
     $selectedRow.Cells['Status'].Value = 'Ja Instalada no Sistema'
     $selectedRow.DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
@@ -3726,7 +3623,7 @@ $btnConnectSelected.Add_Click({
         if ($srv -match '((?:\d{1,3}\.){3}\d{1,3})') { $alternateIp = $matches[1] }
         $result = Connect-UNCPrinterSafe -UNCPath $unc -AlternateHost $alternateIp
         $fallbackHandled = $false
-        if (-not $result.Success -and -not $result.Simulated -and $result.Code -notin @(53,1223,1801) -and $script:currentWindowsBuild -lt 22000) {
+        if (-not $result.Cascaded -and -not $result.Success -and -not $result.Simulated -and $result.Code -notin @(53,1223,1801) -and $script:currentWindowsBuild -lt 22000) {
             $btnCancelConnection.Visible = $false
             Hide-LoadingIndicator -Button $btnConnectSelected
             $offer = Offer-Win10LocalPortFallback -UNCPath $unc -AlternateHost $alternateIp -PreviousResult $result
@@ -3743,7 +3640,7 @@ $btnConnectSelected.Add_Click({
         if ($chkNetDefault.Checked) {
             Set-DefaultPrinterSafe -PrinterName $connectedUNC | Out-Null
         }
-        if ($chkNetTestPage.Checked) {
+        if ($chkNetTestPage.Checked -and -not $result.JobValidated) {
             Invoke-PrintUICommand -Arguments ('/k /n "' + $connectedUNC + '"') | Out-Null
         }
 

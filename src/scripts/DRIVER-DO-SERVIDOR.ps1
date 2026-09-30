@@ -1,13 +1,19 @@
 ﻿param(
-    [Parameter(Mandatory=$true)][string]$UNCPath,
-    [ValidateSet('PublishDriver','InstallDriver')][string]$Action,
-    [string]$ProgressPath = ''
+    [string]$UNCPath,
+    [ValidateSet('PublishDriver','InstallDriver','PrepareHost','PrepareClient')][string]$Action = 'InstallDriver',
+    [string]$ProgressPath = '',
+    [string]$Server = '',
+    [string]$ShareName = '',
+    [string]$DriverName = '',
+    [string]$StateDirectory = ''
 )
 
 # Called only by the bounded worker. Credentials remain in its network token.
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'IMPRESSAO-COMUM.ps1')
 $stage = $null
 $archive = $null
+$policy = $null
 function Set-DriverStage([string]$message) {
     if ($ProgressPath) { [IO.File]::WriteAllText($ProgressPath,$message,[Text.Encoding]::UTF8) }
 }
@@ -18,9 +24,13 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 public static class PrinterDriverTransfer {
  [StructLayout(LayoutKind.Sequential)] public struct INFO6 {
-  public uint Version; public IntPtr Name, Environment, Driver, Data, Config, Help, Dependencies, Monitor, DataType, Previous;
+ public uint Version; public IntPtr Name, Environment, Driver, Data, Config, Help, Dependencies, Monitor, DataType, Previous;
   public System.Runtime.InteropServices.ComTypes.FILETIME Date;
   public ulong DriverVersion; public IntPtr Manufacturer, Url, HardwareId, Provider;
+ }
+ [StructLayout(LayoutKind.Sequential)] public struct INFO8 {
+  public INFO6 Base; public IntPtr Processor, Setup, Profiles, Inf; public uint Attributes; public IntPtr CoreDependencies;
+  public System.Runtime.InteropServices.ComTypes.FILETIME MinDate; public ulong MinVersion;
  }
  [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool OpenPrinterW(string name,out IntPtr handle,IntPtr defaults);
  [DllImport("winspool.drv",SetLastError=true)] static extern bool ClosePrinter(IntPtr handle);
@@ -28,6 +38,14 @@ public static class PrinterDriverTransfer {
  [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool GetPrinterDriverW(IntPtr handle,string environment,uint level,IntPtr buffer,uint size,out uint needed);
  [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool AddPrinterDriverExW(string server,uint level,ref INFO6 info,uint flags);
  static void Check(bool ok) { if(!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+ public static string DriverInf(string queue,string environment) {
+  IntPtr h=IntPtr.Zero,b=IntPtr.Zero;
+  try { Check(OpenPrinterW(queue,out h,IntPtr.Zero));uint size;
+   GetPrinterDriverW(h,environment,8,IntPtr.Zero,0,out size);if(size==0 || size>4194304)throw new Win32Exception(Marshal.GetLastWin32Error());
+   b=Marshal.AllocHGlobal((int)size);Check(GetPrinterDriverW(h,environment,8,b,size,out size));
+   INFO8 i=(INFO8)Marshal.PtrToStructure(b,typeof(INFO8));return Marshal.PtrToStringUni(i.Inf);
+  }finally{if(b!=IntPtr.Zero)Marshal.FreeHGlobal(b);if(h!=IntPtr.Zero)ClosePrinter(h);}
+ }
  public static string QueueDriver(string queue) {
   IntPtr h=IntPtr.Zero,b=IntPtr.Zero;
   try { Check(OpenPrinterW(queue,out h,IntPtr.Zero)); uint size;
@@ -55,7 +73,7 @@ public static class PrinterDriverTransfer {
   Func<string,IntPtr> str=s=>{ if(String.IsNullOrEmpty(s)) return IntPtr.Zero; var p=Marshal.StringToHGlobalUni(s); allocated.Add(p); return p; };
   try { var i=new INFO6(); i.Version=3; i.Name=str(name); i.Environment=str(environment); i.Driver=str(driver); i.Data=str(data); i.Config=str(config); i.Help=str(help);
    i.Dependencies=str(String.Join("\0",dependencies)+"\0\0"); i.DataType=str(dataType);
-   Check(AddPrinterDriverExW(null,6,ref i,0x18));
+   Check(AddPrinterDriverExW(null,6,ref i,0x14));
   } finally { foreach(var p in allocated) Marshal.FreeHGlobal(p); }
  }
 }
@@ -72,9 +90,96 @@ function Get-SafeFileName([string]$name) {
     return $name
 }
 
+function Copy-ExactDriverDirectory {
+    param([string]$Source,[string]$Destination)
+    $root=[IO.Path]::GetFullPath($Source).TrimEnd('\')+'\'
+    $files=@(Get-ChildItem -LiteralPath $Source -Recurse -File -ErrorAction Stop)
+    if(Get-ChildItem -LiteralPath $Source -Recurse -Directory -ErrorAction Stop | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }){throw 'Pacote contém um diretório redirecionado.'}
+    if($files.Count -gt 4096){throw 'Pacote de driver excede 4096 arquivos.'}
+    [long]$total=0
+    [void][IO.Directory]::CreateDirectory($Destination)
+    foreach($file in $files){
+        $full=[IO.Path]::GetFullPath($file.FullName)
+        if(-not $full.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or $file.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Caminho inválido no pacote.'}
+        $total+=$file.Length
+        if($total -gt 536870912){throw 'Pacote de driver excede 512 MB.'}
+        $relative=$full.Substring($root.Length)
+        $target=Join-Path $Destination $relative
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+        Copy-Item -LiteralPath $full -Destination $target -Force -ErrorAction Stop
+    }
+}
+
+function Find-RemoteInfPackage {
+    param([string]$Server,[string]$Share,[string]$Architecture,[string]$Environment,[string]$RequestedDriver)
+    $root='\\'+$Server+'\print$\'+$Architecture
+    $prepared=Join-Path $root ('AssistentePacotes\'+(Get-PackageKey $Share $Architecture).Replace('.zip',''))
+    $metadataPath=Join-Path $prepared 'package.json'
+    if(Test-Path -LiteralPath $metadataPath -PathType Leaf){
+        $metadata=Get-Content -LiteralPath $metadataPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if($metadata.Format -ne 2 -or $metadata.Share -ine $Share -or $metadata.Environment -ine $Environment -or
+            -not $metadata.DriverName -or ($RequestedDriver -and $metadata.DriverName -ine $RequestedDriver)){throw 'Pacote INF preparado não corresponde à fila/arquitetura.'}
+        $infName=Get-SafeFileName ([string]$metadata.InfName)
+        $folder=if($metadata.FilesDirectory){Get-SafeFileName ([string]$metadata.FilesDirectory)}else{'Files'}
+        $source=Join-Path $prepared $folder
+        if(-not(Test-Path -LiteralPath (Join-Path $source $infName))){throw 'INF preparado ausente.'}
+        return @{Source=$source;InfName=$infName;DriverName=[string]$metadata.DriverName;Hashes=$metadata.Files}
+    }
+    if(-not(Test-Path -LiteralPath $root -PathType Container)){throw "Compartilhamento de drivers inacessível: $root"}
+    $queue='\\'+$Server+'\'+$Share
+    $actual=[PrinterDriverTransfer]::QueueDriver($queue)
+    if($RequestedDriver -and $RequestedDriver -ine $actual){throw 'O driver solicitado não corresponde à fila remota.'}
+    $infPath=''
+    try{$infPath=[PrinterDriverTransfer]::DriverInf($queue,$Environment)}catch{}
+    $infs=@(Get-ChildItem -LiteralPath $root -Filter '*.inf' -Recurse -File -ErrorAction Stop)
+    if(-not $infs.Count){return $null}
+    $selected=@()
+    if($infPath){
+        $base=[IO.Path]::GetFileName($infPath)
+        $selected=@($infs | Where-Object Name -ieq $base)
+        if($selected.Count -gt 1){
+            $parent=Split-Path -Parent $infPath
+            if($parent){$folder=Split-Path -Leaf $parent;$selected=@($selected | Where-Object { $_.Directory.Name -ieq $folder })}
+        }
+    }
+    if(-not $selected.Count){
+        # Only select an INF that declares the exact display name and Printer class.
+        $escaped=[regex]::Escape($actual)
+        $selected=@($infs | Where-Object {
+            $text=[IO.File]::ReadAllText($_.FullName,[Text.Encoding]::Default)
+            $text -match '(?im)^\s*Class\s*=\s*"?Printer"?\s*(;.*)?$' -and $text -match ('(?im)"'+$escaped+'"')
+        })
+    }
+    if($selected.Count -ne 1){throw "Não foi possível mapear um único INF para '$actual' em $root. Prepare o pacote no EXE do servidor."}
+    return @{Source=$selected[0].Directory.FullName;InfName=$selected[0].Name;DriverName=$actual;Hashes=$null}
+}
+
+function Publish-InfDriverPackage {
+    param([string]$InfPath,[string]$Name,[string]$Share,[string]$Environment,[string]$Architecture,[string]$SpoolRoot)
+    if(-not $InfPath -or -not(Test-Path -LiteralPath $InfPath -PathType Leaf)){return $null}
+    $repository=[IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32\DriverStore\FileRepository')).TrimEnd('\')+'\'
+    $full=[IO.Path]::GetFullPath($InfPath)
+    if(-not $full.StartsWith($repository,[StringComparison]::OrdinalIgnoreCase)){return $null}
+    $destination=Join-Path $SpoolRoot ($Architecture+'\AssistentePacotes\'+(Get-PackageKey $Share $Architecture).Replace('.zip',''))
+    $filesDirectory='Files_'+[Guid]::NewGuid().ToString('N')
+    $filesRoot=Join-Path $destination $filesDirectory
+    # Immutable directory and atomic metadata: concurrent clients keep a complete package.
+    Copy-ExactDriverDirectory -Source (Split-Path -Parent $full) -Destination $filesRoot
+    $hashes=@(Get-ChildItem -LiteralPath $filesRoot -Recurse -File | ForEach-Object {
+        @{Name=$_.FullName.Substring($filesRoot.Length+1);SHA256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+    })
+    $pending=Join-Path $destination ('package_'+[Guid]::NewGuid().ToString('N')+'.tmp')
+    @{Format=2;Share=$Share;DriverName=$Name;Environment=$Environment;FilesDirectory=$filesDirectory;InfName=[IO.Path]::GetFileName($full);Files=$hashes} |
+        ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $pending -Encoding UTF8
+    $target=Join-Path $destination 'package.json'
+    if(Test-Path -LiteralPath $target){[IO.File]::Replace($pending,$target,[Management.Automation.Language.NullString]::Value)}else{[IO.File]::Move($pending,$target)}
+    return @{Success=$true;DriverName=$Name;Message="Pacote INF completo de '$Name' publicado em print$ para os clientes."}
+}
+
 try {
-    if ($UNCPath -notmatch '^\\\\([^\\]+)\\([^\\]+)$') { throw 'Informe \\SERVIDOR\Fila.' }
-    $server = $matches[1]; $share = $matches[2]
+    if($Action -eq 'PrepareClient'){return (Set-PrinterCompatibilityPolicies -Role Client -StateDirectory $StateDirectory)}
+    $address=Resolve-PrinterUNC -UNCPath $UNCPath -Server $Server -ShareName $ShareName
+    $server=$address.Server; $share=$address.ShareName; $UNCPath=$address.UNCPath
     $arch = if ([Environment]::Is64BitProcess) { 'x64' } else { 'W32X86' }
     $environment = if ($arch -eq 'x64') { 'Windows x64' } else { 'Windows NT x86' }
     $key = Get-PackageKey $share $arch
@@ -87,12 +192,21 @@ try {
     $stage = Join-Path $env:TEMP ('PrinterDriverTransfer_' + [Guid]::NewGuid().ToString('N'))
     [void][IO.Directory]::CreateDirectory($stage)
 
-    if ($Action -eq 'PublishDriver') {
+    if ($Action -in @('PublishDriver','PrepareHost')) {
         Set-DriverStage 'Carregar rotina de exportação'
-        Add-Type -TypeDefinition $native -ErrorAction Stop
+        if(-not('PrinterDriverTransfer' -as [type])){Add-Type -TypeDefinition $native -ErrorAction Stop}
         if ($server -notin @($env:COMPUTERNAME,'localhost','127.0.0.1')) { throw 'Prepare o driver no próprio computador que compartilha a impressora.' }
         $printer = Get-Printer -ErrorAction Stop | Where-Object { $_.Shared -and $_.ShareName -ieq $share } | Select-Object -First 1
         if (-not $printer) { throw 'Esta fila não está compartilhada neste computador.' }
+        if($Action -eq 'PrepareHost'){$policy=Set-PrinterCompatibilityPolicies -Role Host -StateDirectory $StateDirectory; Set-DriverStage $policy.Message}
+        $infPath=''
+        try{$infPath=[PrinterDriverTransfer]::DriverInf($printer.Name,$environment)}catch{}
+        $spoolRoot=Join-Path $env:WINDIR 'System32\spool\drivers'
+        $infPublished=Publish-InfDriverPackage -InfPath $infPath -Name $printer.DriverName -Share $share -Environment $environment -Architecture $arch -SpoolRoot $spoolRoot
+        if($infPublished){
+            if($policy){$infPublished.PolicyStatePath=$policy.StatePath;$infPublished.Message+=' Políticas do host aplicadas; estado anterior: '+$policy.StatePath}
+            return $infPublished
+        }
         $info = [PrinterDriverTransfer]::LocalDriver($printer.Name,$environment)
         if ($info.Version -ne 3) { throw 'A transferência de arquivos atende drivers Tipo 3. Este driver exige o pacote INF do fabricante.' }
         if ($info.Monitor) { throw 'Este driver usa um monitor adicional; é necessário o pacote completo do fabricante.' }
@@ -128,14 +242,37 @@ try {
             $target = Join-Path $destination $key
             if (Test-Path -LiteralPath $target) { [IO.File]::Replace($pending,$target,[Management.Automation.Language.NullString]::Value) } else { [IO.File]::Move($pending,$target) }
         } finally { Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue }
-        return @{ Success=$true; DriverName=$info.Name; Message="Driver '$($info.Name)' preparado. No outro PC, use Conectar Impressora Selecionada; o EXE buscará o pacote em \\$server\print$." }
+        return @{ Success=$true; DriverName=$info.Name; PolicyStatePath=$(if($policy){$policy.StatePath}else{''}); Message="Driver '$($info.Name)' preparado. No outro PC, use Conectar Impressora Selecionada; o EXE buscará o pacote em \\$server\print$."+$(if($policy){' Políticas do host aplicadas; estado anterior: '+$policy.StatePath}else{''}) }
     }
 
+    Set-DriverStage 'Mapear o INF da fila em print$'
+    if(-not('PrinterDriverTransfer' -as [type])){Add-Type -TypeDefinition $native -ErrorAction Stop}
+    $infFailure=''
+    try {
+        $remote=Find-RemoteInfPackage -Server $server -Share $share -Architecture $arch -Environment $environment -RequestedDriver $DriverName
+        if($remote){
+            $infStage=Join-Path $stage 'DriverRemoto'
+            Set-DriverStage 'Copiar o pacote INF completo pela rede'
+            Copy-ExactDriverDirectory -Source $remote.Source -Destination $infStage
+            foreach($file in @($remote.Hashes)){
+                if(-not $file){continue}
+                $candidate=[IO.Path]::GetFullPath((Join-Path $infStage ([string]$file.Name)))
+                if(-not $candidate.StartsWith($infStage+'\',[StringComparison]::OrdinalIgnoreCase) -or
+                    (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash -ine $file.SHA256){throw 'Integridade inválida no pacote INF recebido.'}
+            }
+            Set-DriverStage 'Injetar INF com PnPUtil e confirmar o nome do driver'
+            # Select only the mapped INF, not other drivers that share a spool folder.
+            return (Invoke-PrinterPnPInstall -Directory $infStage -DriverName $remote.DriverName -InfName $remote.InfName)
+        }
+    } catch {$infFailure=$_.Exception.Message}
+
+    # Legacy non-package-aware drivers can have no INF at all. Keep the
+    # generic prepared Type 3 bundle instead of inventing an INF from DLLs.
     # The server publishes one package per share/architecture. This download uses
     # SMB only, so it does not depend on the failing Point and Print RPC download.
     Set-DriverStage 'Localizar pacote do compartilhamento no servidor'
     $packagePath = '\\' + $server + '\print$\AssistentePacotes\' + $key
-    if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw "O pacote ainda não foi preparado. No servidor $server, abra o EXE como administrador, selecione a impressora em Impressoras Instaladas e clique em Preparar driver para outros PCs." }
+    if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw "Não há pacote completo disponível para esta fila. INF remoto: $infFailure. No servidor $server, prepare o driver pelo EXE para publicar o pacote legado quando aplicável." }
     if ((Get-Item -LiteralPath $packagePath).Length -gt 67108864) { throw 'Pacote maior que 64 MB.' }
     $localZip = Join-Path $stage 'package.zip'
     Set-DriverStage 'Copiar pacote pela rede'
@@ -158,9 +295,8 @@ try {
         $manifest.Share -ine $share -or -not $manifest.DriverName -or [string]$manifest.DriverName -match '[\x00-\x1f]' -or
         ([string]$manifest.DriverName).Length -gt 255) { throw 'Pacote não corresponde à fila ou à arquitetura deste Windows.' }
     $driverName = [string]$manifest.DriverName
-    if (Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $driverName -and $_.PrinterEnvironment -ieq $environment }) {
-        return @{ Success=$true; DriverName=$driverName; Existing=$true; Message="Driver '$driverName' registrado neste PC com o mesmo nome e arquitetura. Os arquivos e a versão não foram comparados com os do servidor; o driver existente foi preservado." }
-    }
+    if($DriverName -and $DriverName -ine $driverName){throw 'O nome do driver do pacote legado não corresponde ao solicitado.'}
+    $existingDriver=Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $driverName -and $_.PrinterEnvironment -ieq $environment } | Select-Object -First 1
     if (@($manifest.Files).Count -gt 128 -or @($manifest.Files).Count -eq 0) { throw 'Lista de arquivos inválida.' }
     Set-DriverStage 'Conferir arquivos e componentes locais'
     $resolved = @{}
@@ -198,8 +334,17 @@ try {
     }
     if (-not $manifest.Driver -or -not $manifest.Data -or -not $manifest.Config) { throw 'Driver incompleto.' }
     $dependencies = @($manifest.Dependencies | ForEach-Object { if (-not $resolved.ContainsKey([string]$_)) { throw 'Dependência não declarada.' }; $resolved[[string]$_] })
+    if($existingDriver){
+        $localPaths=@($existingDriver.Path,$existingDriver.DataFile,$existingDriver.ConfigFile,$existingDriver.HelpFile)+@($existingDriver.DependentFiles)
+        $equal=$existingDriver.MajorVersion -eq 3
+        foreach($vendor in @($manifest.Files | Where-Object { $_.Core -ne $true })){
+            $local=@($localPaths | Where-Object { $_ -and [IO.Path]::GetFileName($_) -ieq $vendor.Name }) | Select-Object -First 1
+            if(-not $local -or -not(Test-Path -LiteralPath $local -PathType Leaf) -or (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash -ine $vendor.SHA256){$equal=$false;break}
+        }
+        if($equal){return @{Success=$true;DriverName=$driverName;Existing=$true;FilesCompared=$true;Message="Driver '$driverName' confirmado por arquitetura e hashes dos arquivos do fabricante."}}
+    }
     Set-DriverStage 'Registrar driver no Windows deste PC'
-    Add-Type -TypeDefinition $native -ErrorAction Stop
+    if(-not('PrinterDriverTransfer' -as [type])){Add-Type -TypeDefinition $native -ErrorAction Stop}
     [PrinterDriverTransfer]::Install($driverName,$environment,$resolved[$manifest.Driver],$resolved[$manifest.Data],$resolved[$manifest.Config],$(if ($manifest.Help) { $resolved[$manifest.Help] } else { '' }),[string[]]$dependencies,[string]$manifest.DataType)
     $confirmed = Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $driverName -and $_.PrinterEnvironment -ieq $environment }
     if (-not $confirmed) { throw 'O Windows não confirmou a instalação do driver.' }
