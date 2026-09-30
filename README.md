@@ -2,7 +2,11 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.9.8**.
+Versão atual: **1.9.9**.
+
+A versão 1.9.9 preserva as credenciais explícitas também no instalador por porta local quando o EXE já está elevado. Se `Add-PrinterPort` retornar erro de parâmetro `0x80070057`, tenta validar/criar a porta pela API documentada do monitor local (`XcvData`). Acesso negado não aciona essa alternativa. O resultado registra método, erro CIM anterior e código nativo. A criação da porta foi testada no Windows 11; a confirmação no Windows 10 continua pendente.
+
+“Driver registrado” significa presença do nome/arquitetura; os arquivos e a versão não foram comparados com o servidor. Essa informação não garante que a conexão Point and Print consiga recuperar o pacote.
 
 ## Funções
 

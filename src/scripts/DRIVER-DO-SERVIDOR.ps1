@@ -159,7 +159,7 @@ try {
         ([string]$manifest.DriverName).Length -gt 255) { throw 'Pacote não corresponde à fila ou à arquitetura deste Windows.' }
     $driverName = [string]$manifest.DriverName
     if (Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $driverName -and $_.PrinterEnvironment -ieq $environment }) {
-        return @{ Success=$true; DriverName=$driverName; Existing=$true; Message="Driver '$driverName' já instalado neste PC." }
+        return @{ Success=$true; DriverName=$driverName; Existing=$true; Message="Driver '$driverName' registrado neste PC com o mesmo nome e arquitetura. Os arquivos e a versão não foram comparados com os do servidor; o driver existente foi preservado." }
     }
     if (@($manifest.Files).Count -gt 128 -or @($manifest.Files).Count -eq 0) { throw 'Lista de arquivos inválida.' }
     Set-DriverStage 'Conferir arquivos e componentes locais'

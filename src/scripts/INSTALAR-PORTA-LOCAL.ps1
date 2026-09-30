@@ -6,6 +6,53 @@ param(
 $ErrorActionPreference = 'Stop'
 $result = @{ Success = $false; Message = 'A instalação não foi concluída.' }
 $stage = 'Ler dados da instalação'
+$portMethod = 'Add-PrinterPort'
+$cimPortError = ''
+
+function Add-UNCPrinterPortNative {
+    param([string]$PortName)
+    if (-not ('LocalPortMonitorBridge' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class LocalPortMonitorBridge {
+ [StructLayout(LayoutKind.Sequential)] struct DEFAULTS { public IntPtr DataType, DevMode; public uint Access; }
+ [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool EnumMonitorsW(string server,uint level,IntPtr buffer,uint size,out uint needed,out uint count);
+ [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool OpenPrinterW(string name,out IntPtr handle,ref DEFAULTS defaults);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool ClosePrinter(IntPtr handle);
+ [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool XcvDataW(IntPtr handle,string command,IntPtr input,uint inputSize,IntPtr output,uint outputSize,out uint needed,out uint status);
+ static void Check(bool ok){if(!ok)throw new Win32Exception(Marshal.GetLastWin32Error());}
+ static void Command(IntPtr handle,string command,IntPtr input,uint bytes){uint needed,status;Check(XcvDataW(handle,command,input,bytes,IntPtr.Zero,0,out needed,out status));if(status!=0)throw new Win32Exception((int)status,command+": "+new Win32Exception((int)status).Message);}
+ public static string Add(string port){
+  IntPtr buffer=IntPtr.Zero,handle=IntPtr.Zero,input=IntPtr.Zero;
+  try{
+   uint size,count;EnumMonitorsW(null,2,IntPtr.Zero,0,out size,out count);
+   if(size==0 || size>4194304)throw new Win32Exception(Marshal.GetLastWin32Error());
+   buffer=Marshal.AllocHGlobal((int)size);Check(EnumMonitorsW(null,2,buffer,size,out size,out count));
+   string monitor=null;
+   for(int i=0;i<count;i++){
+    IntPtr row=IntPtr.Add(buffer,i*3*IntPtr.Size);
+    string dll=Marshal.PtrToStringUni(Marshal.ReadIntPtr(row,2*IntPtr.Size));
+    string file=System.IO.Path.GetFileName(dll);
+    if(String.Equals(file,"localmon.dll",StringComparison.OrdinalIgnoreCase) || String.Equals(file,"localspl.dll",StringComparison.OrdinalIgnoreCase)){
+     monitor=Marshal.PtrToStringUni(Marshal.ReadIntPtr(row));break;
+    }
+   }
+   if(monitor==null)throw new Win32Exception(3000,"Monitor local do Windows nao encontrado.");
+   var defaults=new DEFAULTS();defaults.Access=1;
+   Check(OpenPrinterW(",XcvMonitor "+monitor,out handle,ref defaults));
+   input=Marshal.StringToHGlobalUni(port);uint bytes=(uint)((port.Length+1)*2);
+   Command(handle,"PortIsValid",input,bytes);
+   Command(handle,"AddPort",input,bytes);
+   return monitor;
+  }finally{if(input!=IntPtr.Zero)Marshal.FreeHGlobal(input);if(handle!=IntPtr.Zero)ClosePrinter(handle);if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);}
+ }
+}
+'@ -ErrorAction Stop
+    }
+    [LocalPortMonitorBridge]::Add($PortName)
+}
 
 try {
     $request = Import-Clixml -LiteralPath $RequestPath -ErrorAction Stop
@@ -53,7 +100,20 @@ try {
         $createdPort = $false
         $stage = 'Criar porta local UNC'
         if (-not (Get-PrinterPort -Name $unc -ErrorAction SilentlyContinue)) {
-            Add-PrinterPort -Name $unc -ErrorAction Stop
+            try {
+                Add-PrinterPort -Name $unc -ErrorAction Stop
+            } catch {
+                # Only error 87 permits this alternative. Access denied is reported.
+                $parameterError = $_.FullyQualifiedErrorId -match '(?i)0x80070057|0x00000057' -or
+                    (([long]$_.Exception.HResult -band 4294967295) -eq 2147942487)
+                if (-not $parameterError) { throw }
+                $cimPortError = [string]$_.FullyQualifiedErrorId
+                $stage = 'Validar e criar porta UNC no monitor local do Windows'
+                $portMethod = 'XcvData/LocalMon'
+                $monitor = Add-UNCPrinterPortNative -PortName $unc
+                $confirmedPort = Get-PrinterPort -ErrorAction Stop | Where-Object { $_.Name -ieq $unc } | Select-Object -First 1
+                if (-not $confirmedPort) { throw 'O monitor aceitou a operação, mas a porta não apareceu no Windows.' }
+            }
             $createdPort = $true
         }
         try {
@@ -69,7 +129,7 @@ try {
             if ([string]$createdQueue.PortName -ine $unc -or [string]$createdQueue.DriverName -ine $driver) {
                 throw "O Windows criou a fila com porta ou driver diferente do solicitado (porta='$($createdQueue.PortName)', driver='$($createdQueue.DriverName)')."
             }
-            $result = @{ Success = $true; Stage = $stage; QueueName = $queue; PortName = $unc; Message = 'Fila local criada e confirmada no Windows.' }
+            $result = @{ Success = $true; Stage = $stage; QueueName = $queue; PortName = $unc; PortMethod=$portMethod; CimPortError=$cimPortError; Message = 'Fila local criada e confirmada no Windows.' }
         } catch {
             if ($createdPort -and -not (Get-Printer -ErrorAction SilentlyContinue | Where-Object { [string]$_.PortName -ieq $unc })) {
                 Remove-PrinterPort -Name $unc -ErrorAction SilentlyContinue
@@ -84,6 +144,9 @@ try {
         Message = $_.Exception.Message
         HResult = ('0x{0:X8}' -f ([long]$_.Exception.HResult -band 4294967295))
         ErrorId = [string]$_.FullyQualifiedErrorId
+        PortMethod = $portMethod
+        CimPortError = $cimPortError
+        NativeCode = $(if ($_.Exception.GetBaseException() -is [ComponentModel.Win32Exception]) { $_.Exception.GetBaseException().NativeErrorCode } else { $null })
     }
 }
 

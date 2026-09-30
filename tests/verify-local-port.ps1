@@ -10,17 +10,21 @@ param([string]$Installer, [string]$RequestPath, [string]$ResultPath)
 $global:mockPort = ''
 $global:mockQueue = $null
 $global:denyPort = ((Import-Clixml -LiteralPath $RequestPath).QueueName -eq 'MP Negada')
+$global:invalidPort = [bool](Import-Clixml -LiteralPath $RequestPath).FixtureInvalidPort
+Add-Type -TypeDefinition 'public static class LocalPortMonitorBridge { public static string Port=""; public static string Add(string name) { Port=name; return "Local Port (Fixture)"; } }'
 function Get-PrinterDriver {
     param($Name, $ErrorAction)
     if ($Name -eq 'Driver de Teste') { return [pscustomobject]@{ Name=$Name } }
 }
 function Get-PrinterPort {
     param($Name, $ErrorAction)
+    if ([LocalPortMonitorBridge]::Port) { return [pscustomobject]@{ Name=[LocalPortMonitorBridge]::Port } }
     if ($global:mockPort -eq $Name) { return [pscustomobject]@{ Name=$Name } }
 }
 function Add-PrinterPort {
     param($Name, $ErrorAction)
     if ($global:denyPort) { throw 'O acesso foi negado para o recurso especificado.' }
+    if ($global:invalidPort) { throw (New-Object ArgumentException('Invalid parameter fixture')) }
     if ($Name -ne '\\SERVIDOR\MP') { throw 'Porta inesperada.' }
     $global:mockPort = $Name
 }
@@ -64,6 +68,12 @@ try {
         $denied.Message -notlike '*acesso foi negado*' -or -not $denied.HResult) {
         throw 'A falha de acesso ao criar porta não informou etapa e código.'
     }
+    $invalidRequest = Join-Path $tempDirectory 'invalid.request.xml'
+    $invalidResult = Join-Path $tempDirectory 'invalid.result.xml'
+    @{ UNCPath='\\SERVIDOR\MP'; DriverName='Driver de Teste'; QueueName='MP em SERVIDOR'; InfPath=''; FixtureInvalidPort=$true } | Export-Clixml -LiteralPath $invalidRequest
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $wrapper -Installer $installer -RequestPath $invalidRequest -ResultPath $invalidResult
+    $native = Import-Clixml -LiteralPath $invalidResult
+    if (-not $native.Success -or $native.PortMethod -ne 'XcvData/LocalMon') { throw "Erro 87 não acionou o monitor com fila confirmada: $($native.Message)" }
 } finally {
     Remove-Item -LiteralPath $tempDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -761,9 +761,15 @@ function Invoke-LocalPortInstallElevated {
         Write-AppLog -Message "Instalando fila local '$QueueName' na porta $UNCPath com o driver '$DriverName'." -Level 'INFO'
         $start = @{ FilePath='powershell.exe'; ArgumentList=$arguments; WindowStyle='Hidden'; PassThru=$true; ErrorAction='Stop' }
         if (-not (Test-IsAdmin)) { $start.Verb = 'RunAs' }
-        $process = Start-Process @start
+        $result = $null
+        $portServer = ([regex]::Match($UNCPath,'^\\\\([^\\]+)\\')).Groups[1].Value
+        if ((Test-IsAdmin) -and $script:authenticatedPrinterServer -ieq $portServer -and $script:authenticatedPrinterCredential) {
+            Write-AppLog -Message "Instalação por porta local usará a identidade de rede $($script:authenticatedPrinterCredential.UserName)." -Level 'INFO'
+            $result = Invoke-BoundedPrinterAttempt -UNCPath $UNCPath -Method LocalPort -LocalPortRequestPath $requestPath -TimeoutSeconds 60 -NetworkCredential $script:authenticatedPrinterCredential -CredentialServer $portServer
+            if ($result.TimedOut -or $result.Cancelled) { return $result }
+        } else { $process = Start-Process @start }
         $watch = [Diagnostics.Stopwatch]::StartNew()
-        while (-not $process.HasExited) {
+        while ($process -and -not $process.HasExited) {
             if ($watch.Elapsed.TotalSeconds -ge 60) {
                 try { $process.Kill() } catch {}
                 Write-AppLog -Message 'Instalação por porta local excedeu 60 segundos e foi interrompida.' -Level 'AVISO'
@@ -772,10 +778,12 @@ function Invoke-LocalPortInstallElevated {
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 100
         }
-        if (-not (Test-Path -LiteralPath $resultPath)) {
-            return @{ Success=$false; Message="O instalador terminou com código $($process.ExitCode), sem retornar um resultado. Verifique a autorização de administrador." }
+        if (-not $result) {
+            if (-not (Test-Path -LiteralPath $resultPath)) {
+                return @{ Success=$false; Message="O instalador terminou com código $($process.ExitCode), sem retornar um resultado. Verifique a autorização de administrador." }
+            }
+            $result = Import-Clixml -LiteralPath $resultPath -ErrorAction Stop
         }
-        $result = Import-Clixml -LiteralPath $resultPath -ErrorAction Stop
         if ($result.Success) {
             $confirmed = $null
             for ($attempt = 0; $attempt -lt 6; $attempt++) {
@@ -794,10 +802,10 @@ function Invoke-LocalPortInstallElevated {
             if (-not $confirmed) {
                 return @{ Success=$false; Message='O instalador informou sucesso, mas a fila não apareceu no Windows deste PC.' }
             }
-            Write-AppLog -Message "Fila local '$QueueName' confirmada na porta $UNCPath." -Level 'SUCESSO'
+            Write-AppLog -Message "Fila local '$QueueName' confirmada na porta $UNCPath. Método da porta: $($result.PortMethod)." -Level 'SUCESSO'
             return @{ Success=$true; Code=0; ConnectedUNC=$QueueName; PortUNC=$UNCPath; LocalPort=$true; Message='Fila local instalada e confirmada.' }
         }
-        $detail = "Etapa: $($result.Stage)`nErro: $($result.Message)`nCódigo: $($result.HResult)`nIdentificador: $($result.ErrorId)"
+        $detail = "Etapa: $($result.Stage)`nErro: $($result.Message)`nCódigo: $($result.HResult)`nIdentificador: $($result.ErrorId)`nMétodo da porta: $($result.PortMethod)`nCódigo nativo: $($result.NativeCode)`nErro CIM anterior: $($result.CimPortError)"
         Write-AppLog -Message ("Instalação por porta local falhou: " + ($detail -replace "`r?`n", ' | ')) -Level 'AVISO'
         return @{ Success=$false; Message=$detail; Stage=[string]$result.Stage; HResult=[string]$result.HResult }
     } catch {
@@ -1094,17 +1102,26 @@ function Offer-Win10LocalPortFallback {
 function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
-        [ValidateSet('AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver')][string]$Method,
+        [ValidateSet('AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','LocalPort')][string]$Method,
         [int]$TimeoutSeconds = 25,
         [pscredential]$NetworkCredential,
-        [string]$CredentialServer = ''
+        [string]$CredentialServer = '',
+        [string]$LocalPortRequestPath = ''
     )
     $resultPath = ''
     $process = $null
     $nativeProcess = $null
     try {
         if ($UNCPath -match '"') { return @{ Success=$false; Message='O caminho contém aspas inválidas.' } }
-        if ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver')) {
+        if ($Method -eq 'LocalPort') {
+            if (-not $LocalPortInstallPath -or -not (Test-Path -LiteralPath $LocalPortInstallPath) -or
+                -not $LocalPortRequestPath -or -not (Test-Path -LiteralPath $LocalPortRequestPath) -or $LocalPortRequestPath -match '"') {
+                return @{ Success=$false; Message='Rotina ou dados da instalação por porta local ausentes.' }
+            }
+            $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
+            $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -RequestPath "{1}" -ResultPath "{2}"' -f $LocalPortInstallPath,$LocalPortRequestPath,$resultPath
+            $executable = Join-Path $PSHOME 'powershell.exe'
+        } elseif ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver')) {
             if (-not $PrinterConnectionPath -or -not (Test-Path -LiteralPath $PrinterConnectionPath)) {
                 return @{ Success=$false; Message='Rotina interna de conexão não encontrada no EXE.' }
             }
@@ -1160,7 +1177,7 @@ function Invoke-BoundedPrinterAttempt {
             Start-Sleep -Milliseconds 100
         }
         $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
-        if ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver')) {
+        if ($Method -in @('AddPrinter','WScript','PublishDriver','InstallDriver','LocalPort')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
@@ -1564,7 +1581,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.9.8]"
+$form.Text = "Arrumar Impressora VG [v1.9.9]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
