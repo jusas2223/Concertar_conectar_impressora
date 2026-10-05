@@ -1,4 +1,4 @@
-﻿# Conexão em cascata — versão 1.10.2
+﻿# Conexão em cascata — versão 1.10.3
 
 ## Pelo executável
 

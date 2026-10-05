@@ -2,13 +2,15 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.2**.
+Versão atual: **1.10.3**.
 
 A conexão executa uma cascata: conexão nativa, recebimento automático de pacote INF/driver pela rede e alternativa por porta local UNC. Confirma a fila no Windows e acompanha uma página de validação pelo JobId. Falha ou job pendente não gera repetição infinita nem sucesso falso.
 
 No servidor, use **Impressoras locais → Preparar host e driver**. No cliente, selecione a fila e clique em **Conectar impressora**, deixando usuário e senha em branco para usar a sessão atual do Windows. Outra conta só é solicitada após recusa de acesso identificada. Uma conta já confirmada é reutilizada enquanto o aplicativo estiver aberto. O EXE pede elevação antes de coletar as credenciais. A preparação do host/cliente aplica as políticas de compatibilidade solicitadas e reinicia o Spooler.
 
 Na aba **Impressoras da rede**, escolha **Conectar por → Nome do computador (hostname)**, que é o padrão, ou **Endereço IP**. O caminho escolhido aparece ao lado. A mesma escolha é aplicada à autenticação, à conexão e à porta local.
+
+A abertura não consulta impressoras, trabalhos ou drivers. Essas listas carregam ao entrar nas respectivas abas; os botões Atualizar continuam disponíveis. Os controles usam construção direta do .NET e montagem com layout suspenso. [Medições e limites da otimização](PERFORMANCE.md).
 
 [Documentação completa, parâmetros, políticas e limites](CASCATA_WIN10_WIN11.md).
 

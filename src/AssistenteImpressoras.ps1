@@ -21,13 +21,14 @@ param(
 # ------------------------------------------------------------------------------
 # 1. INICIALIZAÇÃO DE AMBIENTE E WINFORMS
 # ------------------------------------------------------------------------------
+$script:startupClock = [Diagnostics.Stopwatch]::StartNew()
 [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
 [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 # Obter diretório do script de forma compatível com PS 2.0 / 3.0 / 5.1+ e executável
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-if ($AppDirectory -and (Test-Path -Path $AppDirectory)) {
+if ($AppDirectory) {
     $ScriptDir = $AppDirectory
 } elseif (-not $ScriptDir -or ($ScriptDir -like "$env:TEMP*")) {
     $curDir = [System.IO.Directory]::GetCurrentDirectory()
@@ -45,6 +46,13 @@ $logCandidates = @(
     (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'AssistenteImpressoras\Logs'),
     (Join-Path -Path $env:TEMP -ChildPath 'AssistenteImpressoras_Logs')
 )
+# Ao rodar de uma pasta de rede, a abertura não espera uma tentativa de escrita SMB.
+$appRoot = [IO.Path]::GetPathRoot($ScriptDir)
+$networkDirectory = $ScriptDir.StartsWith('\\')
+if (-not $networkDirectory -and $appRoot) {
+    try { $networkDirectory = ([IO.DriveInfo]::new($appRoot).DriveType -eq [IO.DriveType]::Network) } catch {}
+}
+if ($networkDirectory) { $logCandidates = @($logCandidates[1],$logCandidates[2]) }
 foreach ($candidate in $logCandidates) {
     $probe = $null
     try {
@@ -174,61 +182,61 @@ public static class PrinterNetworkAuth {
 function Request-PrinterServerCredential {
     param([string]$Server, [string]$InitialUser = '', [System.Windows.Forms.IWin32Window]$Parent)
 
-    $dialog = New-Object System.Windows.Forms.Form
+    $dialog = [System.Windows.Forms.Form]::new()
     $dialog.Text = "Conta para impressora em $Server"
-    $dialog.Size = New-Object System.Drawing.Size(455, 235)
+    $dialog.Size = [System.Drawing.Size]::new(455, 235)
     $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
 
-    $instruction = New-Object System.Windows.Forms.Label
+    $instruction = [System.Windows.Forms.Label]::new()
     $instruction.Text = 'O Windows recusou o acesso com a sessão atual. Use uma conta com permissão no servidor e a senha da conta, não o PIN.'
-    $instruction.Location = New-Object System.Drawing.Point(15, 12)
-    $instruction.Size = New-Object System.Drawing.Size(410, 35)
+    $instruction.Location = [System.Drawing.Point]::new(15, 12)
+    $instruction.Size = [System.Drawing.Size]::new(410, 35)
     $dialog.Controls.Add($instruction)
 
-    $userLabel = New-Object System.Windows.Forms.Label
+    $userLabel = [System.Windows.Forms.Label]::new()
     $userLabel.Text = 'Usuário:'
-    $userLabel.Location = New-Object System.Drawing.Point(15, 57)
+    $userLabel.Location = [System.Drawing.Point]::new(15, 57)
     $userLabel.AutoSize = $true
     $dialog.Controls.Add($userLabel)
-    $userBox = New-Object System.Windows.Forms.TextBox
-    $userBox.Location = New-Object System.Drawing.Point(95, 53)
-    $userBox.Size = New-Object System.Drawing.Size(328, 23)
+    $userBox = [System.Windows.Forms.TextBox]::new()
+    $userBox.Location = [System.Drawing.Point]::new(95, 53)
+    $userBox.Size = [System.Drawing.Size]::new(328, 23)
     $userBox.Text = if ($InitialUser) { $InitialUser } else { "$Server\" }
     $dialog.Controls.Add($userBox)
 
-    $passLabel = New-Object System.Windows.Forms.Label
+    $passLabel = [System.Windows.Forms.Label]::new()
     $passLabel.Text = 'Senha:'
-    $passLabel.Location = New-Object System.Drawing.Point(15, 92)
+    $passLabel.Location = [System.Drawing.Point]::new(15, 92)
     $passLabel.AutoSize = $true
     $dialog.Controls.Add($passLabel)
-    $passBox = New-Object System.Windows.Forms.TextBox
-    $passBox.Location = New-Object System.Drawing.Point(95, 88)
-    $passBox.Size = New-Object System.Drawing.Size(328, 23)
+    $passBox = [System.Windows.Forms.TextBox]::new()
+    $passBox.Location = [System.Drawing.Point]::new(95, 88)
+    $passBox.Size = [System.Drawing.Size]::new(328, 23)
     $passBox.UseSystemPasswordChar = $true
     $dialog.Controls.Add($passBox)
 
-    $connectButton = New-Object System.Windows.Forms.Button
+    $connectButton = [System.Windows.Forms.Button]::new()
     $connectButton.Text = 'Conectar'
-    $connectButton.Location = New-Object System.Drawing.Point(15, 137)
-    $connectButton.Size = New-Object System.Drawing.Size(110, 32)
+    $connectButton.Location = [System.Drawing.Point]::new(15, 137)
+    $connectButton.Size = [System.Drawing.Size]::new(110, 32)
     $connectButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $dialog.Controls.Add($connectButton)
     $dialog.AcceptButton = $connectButton
 
-    $withoutButton = New-Object System.Windows.Forms.Button
+    $withoutButton = [System.Windows.Forms.Button]::new()
     $withoutButton.Text = 'Manter sessão atual'
-    $withoutButton.Location = New-Object System.Drawing.Point(137, 137)
-    $withoutButton.Size = New-Object System.Drawing.Size(135, 32)
+    $withoutButton.Location = [System.Drawing.Point]::new(137, 137)
+    $withoutButton.Size = [System.Drawing.Size]::new(135, 32)
     $withoutButton.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
     $dialog.Controls.Add($withoutButton)
 
-    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton = [System.Windows.Forms.Button]::new()
     $cancelButton.Text = 'Cancelar'
-    $cancelButton.Location = New-Object System.Drawing.Point(284, 137)
-    $cancelButton.Size = New-Object System.Drawing.Size(135, 32)
+    $cancelButton.Location = [System.Drawing.Point]::new(284, 137)
+    $cancelButton.Size = [System.Drawing.Size]::new(135, 32)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancelButton)
     $dialog.CancelButton = $cancelButton
@@ -825,18 +833,18 @@ function Show-LocalPortFallbackDialog {
     $server = $matches[1]
     $share = $matches[2]
 
-    $dialog = New-Object System.Windows.Forms.Form
+    $dialog = [System.Windows.Forms.Form]::new()
     $dialog.Text = 'Instalar impressora compartilhada por porta local'
-    $dialog.Size = New-Object System.Drawing.Size(640, 520)
+    $dialog.Size = [System.Drawing.Size]::new(640, 520)
     $dialog.StartPosition = 'CenterParent'
     $dialog.FormBorderStyle = 'FixedDialog'
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
-    $dialog.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $dialog.Font = [System.Drawing.Font]::new('Segoe UI', 9)
 
-    $intro = New-Object System.Windows.Forms.Label
-    $intro.Location = New-Object System.Drawing.Point(16, 14)
-    $intro.Size = New-Object System.Drawing.Size(590, 61)
+    $intro = [System.Windows.Forms.Label]::new()
+    $intro.Location = [System.Drawing.Point]::new(16, 14)
+    $intro.Size = [System.Drawing.Size]::new(590, 61)
     $intro.Text = if ($Direct) {
         "Esta opção cria neste computador uma fila local apontando para a impressora compartilhada. Selecione um driver compatível com este PC. O Windows pedirá autorização de administrador."
     } else {
@@ -844,14 +852,14 @@ function Show-LocalPortFallbackDialog {
     }
     $dialog.Controls.Add($intro)
 
-    $lblPath = New-Object System.Windows.Forms.Label
-    $lblPath.Location = New-Object System.Drawing.Point(16, 84)
+    $lblPath = [System.Windows.Forms.Label]::new()
+    $lblPath.Location = [System.Drawing.Point]::new(16, 84)
     $lblPath.AutoSize = $true
     $lblPath.Text = 'Porta (caminho da impressora compartilhada):'
     $dialog.Controls.Add($lblPath)
-    $cmbPath = New-Object System.Windows.Forms.ComboBox
-    $cmbPath.Location = New-Object System.Drawing.Point(16, 105)
-    $cmbPath.Size = New-Object System.Drawing.Size(590, 24)
+    $cmbPath = [System.Windows.Forms.ComboBox]::new()
+    $cmbPath.Location = [System.Drawing.Point]::new(16, 105)
+    $cmbPath.Size = [System.Drawing.Size]::new(590, 24)
     $cmbPath.DropDownStyle = 'DropDown'
     [void]$cmbPath.Items.Add($UNCPath)
     if ($AlternateHost -and $AlternateHost -ne $server -and $AlternateHost -match '^\d{1,3}(\.\d{1,3}){3}$') {
@@ -860,25 +868,25 @@ function Show-LocalPortFallbackDialog {
     $cmbPath.SelectedIndex = 0
     $dialog.Controls.Add($cmbPath)
 
-    $lblQueue = New-Object System.Windows.Forms.Label
-    $lblQueue.Location = New-Object System.Drawing.Point(16, 143)
+    $lblQueue = [System.Windows.Forms.Label]::new()
+    $lblQueue.Location = [System.Drawing.Point]::new(16, 143)
     $lblQueue.AutoSize = $true
     $lblQueue.Text = 'Nome que a impressora terá neste PC:'
     $dialog.Controls.Add($lblQueue)
-    $txtQueue = New-Object System.Windows.Forms.TextBox
-    $txtQueue.Location = New-Object System.Drawing.Point(16, 164)
-    $txtQueue.Size = New-Object System.Drawing.Size(590, 24)
+    $txtQueue = [System.Windows.Forms.TextBox]::new()
+    $txtQueue.Location = [System.Drawing.Point]::new(16, 164)
+    $txtQueue.Size = [System.Drawing.Size]::new(590, 24)
     $txtQueue.Text = "$share em $server"
     $dialog.Controls.Add($txtQueue)
 
-    $lblDriver = New-Object System.Windows.Forms.Label
-    $lblDriver.Location = New-Object System.Drawing.Point(16, 202)
+    $lblDriver = [System.Windows.Forms.Label]::new()
+    $lblDriver.Location = [System.Drawing.Point]::new(16, 202)
     $lblDriver.AutoSize = $true
     $lblDriver.Text = 'Driver para Windows 10 (nome exato do modelo):'
     $dialog.Controls.Add($lblDriver)
-    $cmbDriver = New-Object System.Windows.Forms.ComboBox
-    $cmbDriver.Location = New-Object System.Drawing.Point(16, 223)
-    $cmbDriver.Size = New-Object System.Drawing.Size(590, 24)
+    $cmbDriver = [System.Windows.Forms.ComboBox]::new()
+    $cmbDriver.Location = [System.Drawing.Point]::new(16, 223)
+    $cmbDriver.Size = [System.Drawing.Size]::new(590, 24)
     $cmbDriver.DropDownStyle = 'DropDown'
     foreach ($driverName in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$driverName) }
     if ($SuggestedDriverName) {
@@ -887,10 +895,10 @@ function Show-LocalPortFallbackDialog {
         $cmbDriver.Text = 'MP-4200 TH'
     }
     $dialog.Controls.Add($cmbDriver)
-    $btnRefreshDrivers = New-Object System.Windows.Forms.Button
+    $btnRefreshDrivers = [System.Windows.Forms.Button]::new()
     $btnRefreshDrivers.Text = 'Atualizar drivers'
-    $btnRefreshDrivers.Location = New-Object System.Drawing.Point(470, 194)
-    $btnRefreshDrivers.Size = New-Object System.Drawing.Size(136, 26)
+    $btnRefreshDrivers.Location = [System.Drawing.Point]::new(470, 194)
+    $btnRefreshDrivers.Size = [System.Drawing.Size]::new(136, 26)
     $btnRefreshDrivers.Add_Click({
         $selectedDriver = $cmbDriver.Text.Trim()
         $cmbDriver.Items.Clear()
@@ -908,12 +916,12 @@ function Show-LocalPortFallbackDialog {
     })
     $dialog.Controls.Add($btnRefreshDrivers)
 
-    $btnVendorInstaller = New-Object System.Windows.Forms.Button
+    $btnVendorInstaller = [System.Windows.Forms.Button]::new()
     $btnVendorInstaller.Text = 'Instalar driver...'
-    $btnVendorInstaller.Location = New-Object System.Drawing.Point(310, 194)
-    $btnVendorInstaller.Size = New-Object System.Drawing.Size(150, 26)
+    $btnVendorInstaller.Location = [System.Drawing.Point]::new(310, 194)
+    $btnVendorInstaller.Size = [System.Drawing.Size]::new(150, 26)
     $btnVendorInstaller.Add_Click({
-        $picker = New-Object System.Windows.Forms.OpenFileDialog
+        $picker = [System.Windows.Forms.OpenFileDialog]::new()
         $picker.Filter = 'Instalador do fabricante (*.exe;*.msi)|*.exe;*.msi'
         try {
             if ($picker.ShowDialog($dialog) -ne [System.Windows.Forms.DialogResult]::OK) { return }
@@ -958,38 +966,38 @@ function Show-LocalPortFallbackDialog {
     })
     $dialog.Controls.Add($btnVendorInstaller)
 
-    $lblInf = New-Object System.Windows.Forms.Label
-    $lblInf.Location = New-Object System.Drawing.Point(16, 261)
+    $lblInf = [System.Windows.Forms.Label]::new()
+    $lblInf.Location = [System.Drawing.Point]::new(16, 261)
     $lblInf.AutoSize = $true
     $lblInf.Text = 'INF oficial do fabricante (opcional se o driver já estiver instalado):'
     $dialog.Controls.Add($lblInf)
-    $txtInf = New-Object System.Windows.Forms.TextBox
-    $txtInf.Location = New-Object System.Drawing.Point(16, 282)
-    $txtInf.Size = New-Object System.Drawing.Size(485, 24)
+    $txtInf = [System.Windows.Forms.TextBox]::new()
+    $txtInf.Location = [System.Drawing.Point]::new(16, 282)
+    $txtInf.Size = [System.Drawing.Size]::new(485, 24)
     $dialog.Controls.Add($txtInf)
-    $btnBrowse = New-Object System.Windows.Forms.Button
+    $btnBrowse = [System.Windows.Forms.Button]::new()
     $btnBrowse.Text = 'Procurar...'
-    $btnBrowse.Location = New-Object System.Drawing.Point(510, 280)
-    $btnBrowse.Size = New-Object System.Drawing.Size(96, 28)
+    $btnBrowse.Location = [System.Drawing.Point]::new(510, 280)
+    $btnBrowse.Size = [System.Drawing.Size]::new(96, 28)
     $btnBrowse.Add_Click({
-        $picker = New-Object System.Windows.Forms.OpenFileDialog
+        $picker = [System.Windows.Forms.OpenFileDialog]::new()
         $picker.Filter = 'Arquivos de driver (*.inf)|*.inf'
         if ($picker.ShowDialog($dialog) -eq [System.Windows.Forms.DialogResult]::OK) { $txtInf.Text = $picker.FileName }
         $picker.Dispose()
     })
     $dialog.Controls.Add($btnBrowse)
 
-    $lblNote = New-Object System.Windows.Forms.Label
-    $lblNote.Location = New-Object System.Drawing.Point(16, 319)
-    $lblNote.Size = New-Object System.Drawing.Size(590, 48)
+    $lblNote = [System.Windows.Forms.Label]::new()
+    $lblNote.Location = [System.Drawing.Point]::new(16, 319)
+    $lblNote.Size = [System.Drawing.Size]::new(590, 48)
     $lblNote.Text = 'A porta local ainda precisa de acesso à rede e permissão de impressão no PC servidor. Se selecionar um INF, digite o nome do modelo que aparece no pacote. Depois da instalação, faça uma página de teste.'
     $dialog.Controls.Add($lblNote)
 
     $lblNote.Height = 24
-    $btnServerDriver = New-Object System.Windows.Forms.Button
+    $btnServerDriver = [System.Windows.Forms.Button]::new()
     $btnServerDriver.Text = 'Receber driver do servidor (sem download da internet)'
-    $btnServerDriver.Location = New-Object System.Drawing.Point(16, 343)
-    $btnServerDriver.Size = New-Object System.Drawing.Size(590, 27)
+    $btnServerDriver.Location = [System.Drawing.Point]::new(16, 343)
+    $btnServerDriver.Size = [System.Drawing.Size]::new(590, 27)
     $btnServerDriver.Add_Click({
         $btnServerDriver.Enabled = $false
         try {
@@ -1014,22 +1022,22 @@ function Show-LocalPortFallbackDialog {
     })
     $dialog.Controls.Add($btnServerDriver)
 
-    $status = New-Object System.Windows.Forms.Label
-    $status.Location = New-Object System.Drawing.Point(16, 372)
-    $status.Size = New-Object System.Drawing.Size(590, 29)
+    $status = [System.Windows.Forms.Label]::new()
+    $status.Location = [System.Drawing.Point]::new(16, 372)
+    $status.Size = [System.Drawing.Size]::new(590, 29)
     $status.ForeColor = [System.Drawing.Color]::DarkRed
     $status.Text = ''
     $dialog.Controls.Add($status)
 
-    $btnInstall = New-Object System.Windows.Forms.Button
+    $btnInstall = [System.Windows.Forms.Button]::new()
     $btnInstall.Text = 'Instalar por porta local'
-    $btnInstall.Location = New-Object System.Drawing.Point(302, 402)
-    $btnInstall.Size = New-Object System.Drawing.Size(174, 30)
+    $btnInstall.Location = [System.Drawing.Point]::new(302, 402)
+    $btnInstall.Size = [System.Drawing.Size]::new(174, 30)
     $dialog.Controls.Add($btnInstall)
-    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel = [System.Windows.Forms.Button]::new()
     $btnCancel.Text = 'Cancelar'
-    $btnCancel.Location = New-Object System.Drawing.Point(486, 402)
-    $btnCancel.Size = New-Object System.Drawing.Size(120, 30)
+    $btnCancel.Location = [System.Drawing.Point]::new(486, 402)
+    $btnCancel.Size = [System.Drawing.Size]::new(120, 30)
     $btnCancel.Add_Click({ $dialog.Close() })
     $dialog.Controls.Add($btnCancel)
 
@@ -1516,45 +1524,46 @@ function Reset-PrintersStateSafe {
 # 5. CONSTRUÇÃO DA INTERFACE GRÁFICA (WINDOWS FORMS - 1024x768 COMPACTO)
 # ------------------------------------------------------------------------------
 
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.10.2]"
-$form.Size = New-Object System.Drawing.Size(990, 680)
-$form.MinimumSize = New-Object System.Drawing.Size(900, 620)
+$form = [System.Windows.Forms.Form]::new()
+$form.SuspendLayout()
+$form.Text = "Arrumar Impressora VG [v1.10.3]"
+$form.Size = [System.Drawing.Size]::new(990, 680)
+$form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-$form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$form.Font = [System.Drawing.Font]::new("Segoe UI", 9)
 $form.BackColor = [System.Drawing.Color]::FromArgb(245, 246, 248)
 
 # Painel Superior (Cabeçalho com Identificação e Modo Simulação)
-$pnlHeader = New-Object System.Windows.Forms.Panel
+$pnlHeader = [System.Windows.Forms.Panel]::new()
 $pnlHeader.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlHeader.Height = 55
 $pnlHeader.BackColor = [System.Drawing.Color]::FromArgb(33, 43, 54)
 $form.Controls.Add($pnlHeader)
 
-$lblTitle = New-Object System.Windows.Forms.Label
+$lblTitle = [System.Windows.Forms.Label]::new()
 $lblTitle.Text = "Arrumar Impressora VG"
 $lblTitle.ForeColor = [System.Drawing.Color]::White
-$lblTitle.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+$lblTitle.Font = [System.Drawing.Font]::new("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblTitle.AutoSize = $true
-$lblTitle.Location = New-Object System.Drawing.Point(12, 8)
+$lblTitle.Location = [System.Drawing.Point]::new(12, 8)
 $pnlHeader.Controls.Add($lblTitle)
 
 $isAdmin = Test-IsAdmin
 $adminText = if ($isAdmin) { "Administrador: SIM" } else { "Administrador: NÃO (Privilégio Limitado)" }
-$lblSubTitle = New-Object System.Windows.Forms.Label
+$lblSubTitle = [System.Windows.Forms.Label]::new()
 $lblSubTitle.Text = "Host: $env:COMPUTERNAME | Usuário: $env:USERNAME | $adminText"
 $lblSubTitle.ForeColor = [System.Drawing.Color]::FromArgb(180, 195, 210)
-$lblSubTitle.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$lblSubTitle.Font = [System.Drawing.Font]::new("Segoe UI", 8.5)
 $lblSubTitle.AutoSize = $true
-$lblSubTitle.Location = New-Object System.Drawing.Point(14, 30)
+$lblSubTitle.Location = [System.Drawing.Point]::new(14, 30)
 $pnlHeader.Controls.Add($lblSubTitle)
 
-$chkSimulation = New-Object System.Windows.Forms.CheckBox
+$chkSimulation = [System.Windows.Forms.CheckBox]::new()
 $chkSimulation.Text = "Somente diagnosticar (Modo Simulação)"
 $chkSimulation.ForeColor = [System.Drawing.Color]::Gold
-$chkSimulation.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chkSimulation.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $chkSimulation.AutoSize = $true
-$chkSimulation.Location = New-Object System.Drawing.Point(680, 16)
+$chkSimulation.Location = [System.Drawing.Point]::new(680, 16)
 $chkSimulation.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
 $chkSimulation.Add_CheckedChanged({
     $global:SimulationMode = $chkSimulation.Checked
@@ -1569,21 +1578,21 @@ $chkSimulation.Add_CheckedChanged({
 $pnlHeader.Controls.Add($chkSimulation)
 
 # Barra de Status Inferior (StatusStrip)
-$statusStrip = New-Object System.Windows.Forms.StatusStrip
-$statusStrip.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$statusStrip = [System.Windows.Forms.StatusStrip]::new()
+$statusStrip.Font = [System.Drawing.Font]::new("Segoe UI", 9)
 $form.Controls.Add($statusStrip)
 
-$statusLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+$statusLabel = [System.Windows.Forms.ToolStripStatusLabel]::new()
 $statusLabel.Text = "Pronto."
 $statusLabel.ForeColor = [System.Drawing.Color]::Black
 $statusLabel.Spring = $true
 $statusLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
 [void]$statusStrip.Items.Add($statusLabel)
 
-$statusTag = New-Object System.Windows.Forms.ToolStripStatusLabel
+$statusTag = [System.Windows.Forms.ToolStripStatusLabel]::new()
 $statusTag.Text = "SISTEMA OPERACIONAL: OK"
 $statusTag.ForeColor = [System.Drawing.Color]::DarkGreen
-$statusTag.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$statusTag.Font = [System.Drawing.Font]::new("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 [void]$statusStrip.Items.Add($statusTag)
 
 function Update-StatusStrip {
@@ -1609,30 +1618,30 @@ function Update-StatusStrip {
 }
 
 # Painel de Carregamento e Progresso (Animado e Responsivo)
-$pnlLoading = New-Object System.Windows.Forms.Panel
+$pnlLoading = [System.Windows.Forms.Panel]::new()
 $pnlLoading.Dock = [System.Windows.Forms.DockStyle]::Bottom
 $pnlLoading.Height = 36
 $pnlLoading.BackColor = [System.Drawing.Color]::FromArgb(235, 243, 253)
 $pnlLoading.Visible = $false
 $form.Controls.Add($pnlLoading)
 
-$lblLoadingSpinner = New-Object System.Windows.Forms.Label
+$lblLoadingSpinner = [System.Windows.Forms.Label]::new()
 $lblLoadingSpinner.Text = [char]0x25D0
-$lblLoadingSpinner.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+$lblLoadingSpinner.Font = [System.Drawing.Font]::new("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
 $lblLoadingSpinner.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
-$lblLoadingSpinner.Location = New-Object System.Drawing.Point(12, 6)
-$lblLoadingSpinner.Size = New-Object System.Drawing.Size(26, 24)
+$lblLoadingSpinner.Location = [System.Drawing.Point]::new(12, 6)
+$lblLoadingSpinner.Size = [System.Drawing.Size]::new(26, 24)
 $pnlLoading.Controls.Add($lblLoadingSpinner)
 
-$lblLoadingText = New-Object System.Windows.Forms.Label
+$lblLoadingText = [System.Windows.Forms.Label]::new()
 $lblLoadingText.Text = "Carregando..."
-$lblLoadingText.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$lblLoadingText.Font = [System.Drawing.Font]::new("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $lblLoadingText.ForeColor = [System.Drawing.Color]::FromArgb(24, 76, 120)
-$lblLoadingText.Location = New-Object System.Drawing.Point(40, 7)
+$lblLoadingText.Location = [System.Drawing.Point]::new(40, 7)
 $lblLoadingText.AutoSize = $true
 $pnlLoading.Controls.Add($lblLoadingText)
 
-$pbLoadingMarquee = New-Object System.Windows.Forms.ProgressBar
+$pbLoadingMarquee = [System.Windows.Forms.ProgressBar]::new()
 $pbLoadingMarquee.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
 $pbLoadingMarquee.MarqueeAnimationSpeed = 25
 $pbLoadingMarquee.Dock = [System.Windows.Forms.DockStyle]::Bottom
@@ -1640,7 +1649,7 @@ $pbLoadingMarquee.Height = 5
 $pnlLoading.Controls.Add($pbLoadingMarquee)
 
 $script:cancelPrinterConnection = $false
-$btnCancelConnection = New-Object System.Windows.Forms.Button
+$btnCancelConnection = [System.Windows.Forms.Button]::new()
 $btnCancelConnection.Text = 'Cancelar'
 $btnCancelConnection.Dock = [System.Windows.Forms.DockStyle]::Right
 $btnCancelConnection.Width = 92
@@ -1656,7 +1665,7 @@ $pnlLoading.Controls.Add($btnCancelConnection)
 $script:spinnerFrames = @([char]0x25D0, [char]0x25D3, [char]0x25D1, [char]0x25D2)
 $script:spinnerIndex = 0
 
-$tmrSpinner = New-Object System.Windows.Forms.Timer
+$tmrSpinner = [System.Windows.Forms.Timer]::new()
 $tmrSpinner.Interval = 90
 $tmrSpinner.Add_Tick({
     $script:spinnerIndex = ($script:spinnerIndex + 1) % $script:spinnerFrames.Length
@@ -1957,22 +1966,22 @@ function Format-PrinterAsNamedUNC {
     return "\\$($env:COMPUTERNAME)\$shareName"
 }
 
-$tabControl = New-Object System.Windows.Forms.TabControl
+$tabControl = [System.Windows.Forms.TabControl]::new()
 $tabControl.Dock = [System.Windows.Forms.DockStyle]::Fill
-$tabControl.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$tabControl.Font = [System.Drawing.Font]::new("Segoe UI", 9)
 $form.Controls.Add($tabControl)
 $tabControl.BringToFront()
 
 # Criar as 8 abas
-$tab1 = New-Object System.Windows.Forms.TabPage; $tab1.Text = "1. Diagnóstico"
-$tab2 = New-Object System.Windows.Forms.TabPage; $tab2.Text = "2. Impressoras Instaladas"
-$tab3 = New-Object System.Windows.Forms.TabPage; $tab3.Text = "3. Impressoras da Rede"
+$tab1 = [System.Windows.Forms.TabPage]::new(); $tab1.Text = "1. Diagnóstico"
+$tab2 = [System.Windows.Forms.TabPage]::new(); $tab2.Text = "2. Impressoras Instaladas"
+$tab3 = [System.Windows.Forms.TabPage]::new(); $tab3.Text = "3. Impressoras da Rede"
 
-$tab4 = New-Object System.Windows.Forms.TabPage; $tab4.Text = "4. Instalar por Caminho"
-$tab5 = New-Object System.Windows.Forms.TabPage; $tab5.Text = "5. Instalar por IP"
-$tab6 = New-Object System.Windows.Forms.TabPage; $tab6.Text = ("6. Fila e Spooler")
-$tab7 = New-Object System.Windows.Forms.TabPage; $tab7.Text = ("7. " + [char]0xC1 + "rea de Trabalho Remota")
-$tab8 = New-Object System.Windows.Forms.TabPage; $tab8.Text = ("8. Relat" + [char]0xF3 + "rio e Logs")
+$tab4 = [System.Windows.Forms.TabPage]::new(); $tab4.Text = "4. Instalar por Caminho"
+$tab5 = [System.Windows.Forms.TabPage]::new(); $tab5.Text = "5. Instalar por IP"
+$tab6 = [System.Windows.Forms.TabPage]::new(); $tab6.Text = ("6. Fila e Spooler")
+$tab7 = [System.Windows.Forms.TabPage]::new(); $tab7.Text = ("7. " + [char]0xC1 + "rea de Trabalho Remota")
+$tab8 = [System.Windows.Forms.TabPage]::new(); $tab8.Text = ("8. Relat" + [char]0xF3 + "rio e Logs")
 
 $tabControl.TabPages.Add($tab1)
 $tabControl.TabPages.Add($tab2)
@@ -1987,33 +1996,33 @@ $tabControl.TabPages.Add($tab8)
 # ==============================================================================
 # ABA 1: DIAGNÓSTICO DO COMPUTADOR
 # ==============================================================================
-$pnlDiagTop = New-Object System.Windows.Forms.Panel
+$pnlDiagTop = [System.Windows.Forms.Panel]::new()
 $pnlDiagTop.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlDiagTop.Height = 45
 $tab1.Controls.Add($pnlDiagTop)
 
-$btnRunFullDiag = New-Object System.Windows.Forms.Button
+$btnRunFullDiag = [System.Windows.Forms.Button]::new()
 $btnRunFullDiag.Text = "Executar Diagnóstico Completo"
-$btnRunFullDiag.Size = New-Object System.Drawing.Size(220, 32)
-$btnRunFullDiag.Location = New-Object System.Drawing.Point(10, 6)
-$btnRunFullDiag.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$btnRunFullDiag.Size = [System.Drawing.Size]::new(220, 32)
+$btnRunFullDiag.Location = [System.Drawing.Point]::new(10, 6)
+$btnRunFullDiag.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $btnRunFullDiag.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnRunFullDiag.ForeColor = [System.Drawing.Color]::White
 $btnRunFullDiag.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $pnlDiagTop.Controls.Add($btnRunFullDiag)
 
-$btnCopyDiag = New-Object System.Windows.Forms.Button
+$btnCopyDiag = [System.Windows.Forms.Button]::new()
 $btnCopyDiag.Text = "Copiar Diagnóstico"
-$btnCopyDiag.Size = New-Object System.Drawing.Size(150, 32)
-$btnCopyDiag.Location = New-Object System.Drawing.Point(240, 6)
+$btnCopyDiag.Size = [System.Drawing.Size]::new(150, 32)
+$btnCopyDiag.Location = [System.Drawing.Point]::new(240, 6)
 $pnlDiagTop.Controls.Add($btnCopyDiag)
 
-$txtDiagReport = New-Object System.Windows.Forms.TextBox
+$txtDiagReport = [System.Windows.Forms.TextBox]::new()
 $txtDiagReport.Multiline = $true
 $txtDiagReport.ReadOnly = $true
 $txtDiagReport.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
 $txtDiagReport.Dock = [System.Windows.Forms.DockStyle]::Fill
-$txtDiagReport.Font = New-Object System.Drawing.Font("Consolas", 9.5)
+$txtDiagReport.Font = [System.Drawing.Font]::new("Consolas", 9.5)
 $txtDiagReport.BackColor = [System.Drawing.Color]::White
 $tab1.Controls.Add($txtDiagReport)
 $txtDiagReport.BringToFront()
@@ -2178,68 +2187,68 @@ $btnRunFullDiag.Add_Click({
 # ==============================================================================
 # ABA 2: IMPRESSORAS INSTALADAS
 # ==============================================================================
-$pnlPrintersTop = New-Object System.Windows.Forms.Panel
+$pnlPrintersTop = [System.Windows.Forms.Panel]::new()
 $pnlPrintersTop.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlPrintersTop.Height = 82
 $tab2.Controls.Add($pnlPrintersTop)
 
-$btnRefreshPrinters = New-Object System.Windows.Forms.Button
+$btnRefreshPrinters = [System.Windows.Forms.Button]::new()
 $btnRefreshPrinters.Text = "Atualizar"
-$btnRefreshPrinters.Size = New-Object System.Drawing.Size(80, 32)
-$btnRefreshPrinters.Location = New-Object System.Drawing.Point(8, 6)
+$btnRefreshPrinters.Size = [System.Drawing.Size]::new(80, 32)
+$btnRefreshPrinters.Location = [System.Drawing.Point]::new(8, 6)
 $pnlPrintersTop.Controls.Add($btnRefreshPrinters)
 
-$btnSetDefault = New-Object System.Windows.Forms.Button
+$btnSetDefault = [System.Windows.Forms.Button]::new()
 $btnSetDefault.Text = "Definir Padrão"
-$btnSetDefault.Size = New-Object System.Drawing.Size(110, 32)
-$btnSetDefault.Location = New-Object System.Drawing.Point(92, 6)
+$btnSetDefault.Size = [System.Drawing.Size]::new(110, 32)
+$btnSetDefault.Location = [System.Drawing.Point]::new(92, 6)
 $pnlPrintersTop.Controls.Add($btnSetDefault)
 
-$btnOpenQueue = New-Object System.Windows.Forms.Button
+$btnOpenQueue = [System.Windows.Forms.Button]::new()
 $btnOpenQueue.Text = "Abrir Fila"
-$btnOpenQueue.Size = New-Object System.Drawing.Size(80, 32)
-$btnOpenQueue.Location = New-Object System.Drawing.Point(206, 6)
+$btnOpenQueue.Size = [System.Drawing.Size]::new(80, 32)
+$btnOpenQueue.Location = [System.Drawing.Point]::new(206, 6)
 $pnlPrintersTop.Controls.Add($btnOpenQueue)
 
-$btnPrintTest = New-Object System.Windows.Forms.Button
+$btnPrintTest = [System.Windows.Forms.Button]::new()
 $btnPrintTest.Text = "Teste Windows"
-$btnPrintTest.Size = New-Object System.Drawing.Size(105, 32)
-$btnPrintTest.Location = New-Object System.Drawing.Point(290, 6)
+$btnPrintTest.Size = [System.Drawing.Size]::new(105, 32)
+$btnPrintTest.Location = [System.Drawing.Point]::new(290, 6)
 $pnlPrintersTop.Controls.Add($btnPrintTest)
 
-$btnThermalTest = New-Object System.Windows.Forms.Button
+$btnThermalTest = [System.Windows.Forms.Button]::new()
 $btnThermalTest.Text = "Teste RAW / Térmica"
-$btnThermalTest.Size = New-Object System.Drawing.Size(140, 32)
-$btnThermalTest.Location = New-Object System.Drawing.Point(399, 6)
+$btnThermalTest.Size = [System.Drawing.Size]::new(140, 32)
+$btnThermalTest.Location = [System.Drawing.Point]::new(399, 6)
 $btnThermalTest.BackColor = [System.Drawing.Color]::FromArgb(255, 243, 205)
 $pnlPrintersTop.Controls.Add($btnThermalTest)
 
-$btnOpenProps = New-Object System.Windows.Forms.Button
+$btnOpenProps = [System.Windows.Forms.Button]::new()
 $btnOpenProps.Text = "Propriedades"
-$btnOpenProps.Size = New-Object System.Drawing.Size(95, 32)
-$btnOpenProps.Location = New-Object System.Drawing.Point(543, 6)
+$btnOpenProps.Size = [System.Drawing.Size]::new(95, 32)
+$btnOpenProps.Location = [System.Drawing.Point]::new(543, 6)
 $pnlPrintersTop.Controls.Add($btnOpenProps)
 
-$btnFixPrinter = New-Object System.Windows.Forms.Button
+$btnFixPrinter = [System.Windows.Forms.Button]::new()
 $btnFixPrinter.Text = "Despausar / Online"
-$btnFixPrinter.Size = New-Object System.Drawing.Size(125, 32)
-$btnFixPrinter.Location = New-Object System.Drawing.Point(642, 6)
+$btnFixPrinter.Size = [System.Drawing.Size]::new(125, 32)
+$btnFixPrinter.Location = [System.Drawing.Point]::new(642, 6)
 $pnlPrintersTop.Controls.Add($btnFixPrinter)
 
-$btnRemoveConn = New-Object System.Windows.Forms.Button
+$btnRemoveConn = [System.Windows.Forms.Button]::new()
 $btnRemoveConn.Text = "Remover"
-$btnRemoveConn.Size = New-Object System.Drawing.Size(90, 32)
-$btnRemoveConn.Location = New-Object System.Drawing.Point(771, 6)
+$btnRemoveConn.Size = [System.Drawing.Size]::new(90, 32)
+$btnRemoveConn.Location = [System.Drawing.Point]::new(771, 6)
 $btnRemoveConn.ForeColor = [System.Drawing.Color]::DarkRed
 $pnlPrintersTop.Controls.Add($btnRemoveConn)
 
-$btnPublishDriver = New-Object System.Windows.Forms.Button
+$btnPublishDriver = [System.Windows.Forms.Button]::new()
 $btnPublishDriver.Text = 'Preparar host e driver'
-$btnPublishDriver.Size = New-Object System.Drawing.Size(250, 30)
-$btnPublishDriver.Location = New-Object System.Drawing.Point(8, 44)
+$btnPublishDriver.Size = [System.Drawing.Size]::new(250, 30)
+$btnPublishDriver.Location = [System.Drawing.Point]::new(8, 44)
 $pnlPrintersTop.Controls.Add($btnPublishDriver)
 
-$dgvPrinters = New-Object System.Windows.Forms.DataGridView
+$dgvPrinters = [System.Windows.Forms.DataGridView]::new()
 $dgvPrinters.Dock = [System.Windows.Forms.DockStyle]::Fill
 $dgvPrinters.ReadOnly = $true
 $dgvPrinters.AllowUserToAddRows = $false
@@ -2298,7 +2307,7 @@ function Refresh-PrintersGrid {
 
         # Destaque visual: Padrão em verde suave, Offline/Pausada em amarelo
         if ($p.Default) {
-            $dgvPrinters.Rows[$rowIndex].DefaultCellStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            $dgvPrinters.Rows[$rowIndex].DefaultCellStyle.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
         }
         if ($p.WorkOffline -or $p.Paused) {
             $dgvPrinters.Rows[$rowIndex].DefaultCellStyle.ForeColor = [System.Drawing.Color]::DarkGoldenrod
@@ -2401,32 +2410,32 @@ $btnThermalTest.Add_Click({
     $ip = $dgvPrinters.SelectedRows[0].Cells["IP"].Value
 
     # Modal de Segurança para Teste Térmico RAW
-    $dlg = New-Object System.Windows.Forms.Form
+    $dlg = [System.Windows.Forms.Form]::new()
     $dlg.Text = "Teste Térmico RAW Seguro - " + $pName
-    $dlg.Size = New-Object System.Drawing.Size(520, 340)
+    $dlg.Size = [System.Drawing.Size]::new(520, 340)
     $dlg.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
     $dlg.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dlg.MaximizeBox = $false
     $dlg.MinimizeBox = $false
-    $dlg.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $dlg.Font = [System.Drawing.Font]::new("Segoe UI", 9)
 
-    $lblWarn = New-Object System.Windows.Forms.Label
+    $lblWarn = [System.Windows.Forms.Label]::new()
     $lblWarn.Text = "ATENÇÃO DE SEGURANÇA:`nO envio de comandos RAW para impressoras jato de tinta ou laser convencionais pode resultar em dezenas de páginas em branco impressas.`n`nSomente utilize esta função se tiver certeza de que a impressora é térmica (Bematech, Elgin, Epson, Zebra, Argox) e selecione a linguagem correspondente."
     $lblWarn.ForeColor = [System.Drawing.Color]::DarkRed
-    $lblWarn.Location = New-Object System.Drawing.Point(15, 15)
-    $lblWarn.Size = New-Object System.Drawing.Size(480, 75)
+    $lblWarn.Location = [System.Drawing.Point]::new(15, 15)
+    $lblWarn.Size = [System.Drawing.Size]::new(480, 75)
     $dlg.Controls.Add($lblWarn)
 
-    $lblLang = New-Object System.Windows.Forms.Label
+    $lblLang = [System.Windows.Forms.Label]::new()
     $lblLang.Text = "Linguagem / Padrão Térmico:"
-    $lblLang.Location = New-Object System.Drawing.Point(15, 100)
+    $lblLang.Location = [System.Drawing.Point]::new(15, 100)
     $lblLang.AutoSize = $true
     $dlg.Controls.Add($lblLang)
 
-    $cmbLang = New-Object System.Windows.Forms.ComboBox
+    $cmbLang = [System.Windows.Forms.ComboBox]::new()
     $cmbLang.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-    $cmbLang.Location = New-Object System.Drawing.Point(15, 122)
-    $cmbLang.Size = New-Object System.Drawing.Size(470, 23)
+    $cmbLang.Location = [System.Drawing.Point]::new(15, 122)
+    $cmbLang.Size = [System.Drawing.Size]::new(470, 23)
     [void]$cmbLang.Items.Add("ESC/POS - Cupom Térmico (Bematech MP-4200 / Elgin i9 / Epson TM-T20)")
     [void]$cmbLang.Items.Add("PPLB - Etiqueta de Teste (Argox OS-214 Plus)")
     [void]$cmbLang.Items.Add("ZPL II - Etiqueta de Teste (Zebra ZD220 / GC420 / ZD230)")
@@ -2434,26 +2443,26 @@ $btnThermalTest.Add_Click({
     $cmbLang.SelectedIndex = 0
     $dlg.Controls.Add($cmbLang)
 
-    $chkConsent = New-Object System.Windows.Forms.CheckBox
+    $chkConsent = [System.Windows.Forms.CheckBox]::new()
     $chkConsent.Text = "Estou ciente do modelo da impressora e autorizo o envio do comando RAW."
-    $chkConsent.Location = New-Object System.Drawing.Point(15, 165)
-    $chkConsent.Size = New-Object System.Drawing.Size(480, 35)
+    $chkConsent.Location = [System.Drawing.Point]::new(15, 165)
+    $chkConsent.Size = [System.Drawing.Size]::new(480, 35)
     $dlg.Controls.Add($chkConsent)
 
-    $btnSend = New-Object System.Windows.Forms.Button
+    $btnSend = [System.Windows.Forms.Button]::new()
     $btnSend.Text = "Enviar Teste RAW"
-    $btnSend.Location = New-Object System.Drawing.Point(15, 215)
-    $btnSend.Size = New-Object System.Drawing.Size(160, 35)
+    $btnSend.Location = [System.Drawing.Point]::new(15, 215)
+    $btnSend.Size = [System.Drawing.Size]::new(160, 35)
     $btnSend.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
     $btnSend.ForeColor = [System.Drawing.Color]::White
     $btnSend.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnSend.Enabled = $false
     $dlg.Controls.Add($btnSend)
 
-    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel = [System.Windows.Forms.Button]::new()
     $btnCancel.Text = "Cancelar"
-    $btnCancel.Location = New-Object System.Drawing.Point(185, 215)
-    $btnCancel.Size = New-Object System.Drawing.Size(100, 35)
+    $btnCancel.Location = [System.Drawing.Point]::new(185, 215)
+    $btnCancel.Size = [System.Drawing.Size]::new(100, 35)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dlg.Controls.Add($btnCancel)
 
@@ -2646,70 +2655,70 @@ $btnRemoveConn.Add_Click({
 # ==============================================================================
 # ABA 3: IMPRESSORAS DA REDE (BUSCA AUTOMATICA, SMB E CONEXAO)
 # ==============================================================================
-$pnlNetTop = New-Object System.Windows.Forms.Panel
+$pnlNetTop = [System.Windows.Forms.Panel]::new()
 $pnlNetTop.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlNetTop.Height = 85
 $pnlNetTop.BackColor = [System.Drawing.Color]::FromArgb(240, 243, 246)
 $tab3.Controls.Add($pnlNetTop)
 
-$btnAutoScan = New-Object System.Windows.Forms.Button
+$btnAutoScan = [System.Windows.Forms.Button]::new()
 $btnAutoScan.Text = "Varrer Rede e Atualizar Impressoras"
-$btnAutoScan.Size = New-Object System.Drawing.Size(260, 34)
-$btnAutoScan.Location = New-Object System.Drawing.Point(12, 10)
+$btnAutoScan.Size = [System.Drawing.Size]::new(260, 34)
+$btnAutoScan.Location = [System.Drawing.Point]::new(12, 10)
 $btnAutoScan.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnAutoScan.ForeColor = [System.Drawing.Color]::White
 $btnAutoScan.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnAutoScan.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$btnAutoScan.Font = [System.Drawing.Font]::new("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $pnlNetTop.Controls.Add($btnAutoScan)
 
-$btnToggleManual = New-Object System.Windows.Forms.Button
+$btnToggleManual = [System.Windows.Forms.Button]::new()
 $btnToggleManual.Text = "Busca por Servidor Especifico..."
-$btnToggleManual.Size = New-Object System.Drawing.Size(220, 34)
-$btnToggleManual.Location = New-Object System.Drawing.Point(280, 10)
+$btnToggleManual.Size = [System.Drawing.Size]::new(220, 34)
+$btnToggleManual.Location = [System.Drawing.Point]::new(280, 10)
 $pnlNetTop.Controls.Add($btnToggleManual)
 
-$lblNetFilter = New-Object System.Windows.Forms.Label
+$lblNetFilter = [System.Windows.Forms.Label]::new()
 $lblNetFilter.Text = "Filtro:"
-$lblNetFilter.Location = New-Object System.Drawing.Point(505, 18)
+$lblNetFilter.Location = [System.Drawing.Point]::new(505, 18)
 $lblNetFilter.AutoSize = $true
 $pnlNetTop.Controls.Add($lblNetFilter)
 
-$txtFilter = New-Object System.Windows.Forms.TextBox
-$txtFilter.Location = New-Object System.Drawing.Point(545, 15)
-$txtFilter.Size = New-Object System.Drawing.Size(105, 23)
+$txtFilter = [System.Windows.Forms.TextBox]::new()
+$txtFilter.Location = [System.Drawing.Point]::new(545, 15)
+$txtFilter.Size = [System.Drawing.Size]::new(105, 23)
 $pnlNetTop.Controls.Add($txtFilter)
 
-$btnFix70911b = New-Object System.Windows.Forms.Button
+$btnFix70911b = [System.Windows.Forms.Button]::new()
 $btnFix70911b.Text = "Resolver erro 709 / 11b"
-$btnFix70911b.Size = New-Object System.Drawing.Size(190, 30)
-$btnFix70911b.Location = New-Object System.Drawing.Point(755, 47)
+$btnFix70911b.Size = [System.Drawing.Size]::new(190, 30)
+$btnFix70911b.Location = [System.Drawing.Point]::new(755, 47)
 $btnFix70911b.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $btnFix70911b.BackColor = [System.Drawing.Color]::FromArgb(178, 79, 18)
 $btnFix70911b.ForeColor = [System.Drawing.Color]::White
 $btnFix70911b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnFix70911b.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$btnFix70911b.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $pnlNetTop.Controls.Add($btnFix70911b)
 
-$btnFixNetwork24H2 = New-Object System.Windows.Forms.Button
+$btnFixNetwork24H2 = [System.Windows.Forms.Button]::new()
 $btnFixNetwork24H2.Text = "Corrigir acesso à rede (24H2)"
 $script:currentWindowsBuild = Get-CurrentWindowsBuild
 $script:networkAccessActionMode = Get-NetworkAccessActionMode -BuildNumber $script:currentWindowsBuild
 if ($script:networkAccessActionMode -eq 'Win10PrinterDiagnosis') {
     $btnFixNetwork24H2.Text = 'Diagnóstico Win10 → 11'
 }
-$btnFixNetwork24H2.Size = New-Object System.Drawing.Size(190, 30)
-$btnFixNetwork24H2.Location = New-Object System.Drawing.Point(755, 10)
+$btnFixNetwork24H2.Size = [System.Drawing.Size]::new(190, 30)
+$btnFixNetwork24H2.Location = [System.Drawing.Point]::new(755, 10)
 $btnFixNetwork24H2.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left
 $btnFixNetwork24H2.BackColor = [System.Drawing.Color]::FromArgb(35, 99, 142)
 $btnFixNetwork24H2.ForeColor = [System.Drawing.Color]::White
 $btnFixNetwork24H2.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnFixNetwork24H2.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$btnFixNetwork24H2.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $pnlNetTop.Controls.Add($btnFixNetwork24H2)
 
-$btnDiagnoseShare = New-Object System.Windows.Forms.Button
+$btnDiagnoseShare = [System.Windows.Forms.Button]::new()
 $btnDiagnoseShare.Text = 'Diagnóstico detalhado'
-$btnDiagnoseShare.Size = New-Object System.Drawing.Size(96, 68)
-$btnDiagnoseShare.Location = New-Object System.Drawing.Point(655, 10)
+$btnDiagnoseShare.Size = [System.Drawing.Size]::new(96, 68)
+$btnDiagnoseShare.Location = [System.Drawing.Point]::new(655, 10)
 $btnDiagnoseShare.BackColor = [System.Drawing.Color]::FromArgb(69, 79, 92)
 $btnDiagnoseShare.ForeColor = [System.Drawing.Color]::White
 $btnDiagnoseShare.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -2721,76 +2730,76 @@ $pnlNetTop.Add_Resize({
     $btnFixNetwork24H2.Left = $left
 })
 
-$lblScanStatus = New-Object System.Windows.Forms.Label
+$lblScanStatus = [System.Windows.Forms.Label]::new()
 $lblScanStatus.Text = "Status: Aguardando varredura da rede..."
-$lblScanStatus.Location = New-Object System.Drawing.Point(14, 52)
-$lblScanStatus.Size = New-Object System.Drawing.Size(625, 28)
-$lblScanStatus.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$lblScanStatus.Location = [System.Drawing.Point]::new(14, 52)
+$lblScanStatus.Size = [System.Drawing.Size]::new(625, 28)
+$lblScanStatus.Font = [System.Drawing.Font]::new("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $lblScanStatus.ForeColor = [System.Drawing.Color]::FromArgb(50, 70, 90)
 $pnlNetTop.Controls.Add($lblScanStatus)
 
 # Painel de busca manual (retrátil)
-$pnlNetSearch = New-Object System.Windows.Forms.GroupBox
+$pnlNetSearch = [System.Windows.Forms.GroupBox]::new()
 $pnlNetSearch.Text = "Busca Manual de Servidor de Impressao"
 $pnlNetSearch.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlNetSearch.Height = 113
 $pnlNetSearch.Visible = $false
 $tab3.Controls.Add($pnlNetSearch)
 
-$lblServerHost = New-Object System.Windows.Forms.Label
+$lblServerHost = [System.Windows.Forms.Label]::new()
 $lblServerHost.Text = "Servidor / IP:"
-$lblServerHost.Location = New-Object System.Drawing.Point(12, 22)
+$lblServerHost.Location = [System.Drawing.Point]::new(12, 22)
 $lblServerHost.AutoSize = $true
 $pnlNetSearch.Controls.Add($lblServerHost)
 
-$txtServerHost = New-Object System.Windows.Forms.TextBox
+$txtServerHost = [System.Windows.Forms.TextBox]::new()
 $txtServerHost.Text = ""
-$txtServerHost.Location = New-Object System.Drawing.Point(95, 19)
-$txtServerHost.Size = New-Object System.Drawing.Size(180, 23)
+$txtServerHost.Location = [System.Drawing.Point]::new(95, 19)
+$txtServerHost.Size = [System.Drawing.Size]::new(180, 23)
 $pnlNetSearch.Controls.Add($txtServerHost)
 
-$lblNetUser = New-Object System.Windows.Forms.Label
+$lblNetUser = [System.Windows.Forms.Label]::new()
 $lblNetUser.Text = "Usuario (Opc.):"
-$lblNetUser.Location = New-Object System.Drawing.Point(290, 22)
+$lblNetUser.Location = [System.Drawing.Point]::new(290, 22)
 $lblNetUser.AutoSize = $true
 $pnlNetSearch.Controls.Add($lblNetUser)
 
-$txtNetUser = New-Object System.Windows.Forms.TextBox
-$txtNetUser.Location = New-Object System.Drawing.Point(380, 19)
-$txtNetUser.Size = New-Object System.Drawing.Size(130, 23)
+$txtNetUser = [System.Windows.Forms.TextBox]::new()
+$txtNetUser.Location = [System.Drawing.Point]::new(380, 19)
+$txtNetUser.Size = [System.Drawing.Size]::new(130, 23)
 $pnlNetSearch.Controls.Add($txtNetUser)
 
-$lblNetPass = New-Object System.Windows.Forms.Label
+$lblNetPass = [System.Windows.Forms.Label]::new()
 $lblNetPass.Text = "Senha (Memoria):"
-$lblNetPass.Location = New-Object System.Drawing.Point(525, 22)
+$lblNetPass.Location = [System.Drawing.Point]::new(525, 22)
 $lblNetPass.AutoSize = $true
 $pnlNetSearch.Controls.Add($lblNetPass)
 
-$txtNetPass = New-Object System.Windows.Forms.TextBox
+$txtNetPass = [System.Windows.Forms.TextBox]::new()
 $txtNetPass.UseSystemPasswordChar = $true
-$txtNetPass.Location = New-Object System.Drawing.Point(635, 19)
-$txtNetPass.Size = New-Object System.Drawing.Size(120, 23)
+$txtNetPass.Location = [System.Drawing.Point]::new(635, 19)
+$txtNetPass.Size = [System.Drawing.Size]::new(120, 23)
 $pnlNetSearch.Controls.Add($txtNetPass)
 
-$btnTestServer = New-Object System.Windows.Forms.Button
+$btnTestServer = [System.Windows.Forms.Button]::new()
 $btnTestServer.Text = "Testar Servidor (Ping/SMB)"
-$btnTestServer.Location = New-Object System.Drawing.Point(15, 55)
-$btnTestServer.Size = New-Object System.Drawing.Size(180, 30)
+$btnTestServer.Location = [System.Drawing.Point]::new(15, 55)
+$btnTestServer.Size = [System.Drawing.Size]::new(180, 30)
 $pnlNetSearch.Controls.Add($btnTestServer)
 
-$btnFindShares = New-Object System.Windows.Forms.Button
+$btnFindShares = [System.Windows.Forms.Button]::new()
 $btnFindShares.Text = "Buscar Compartilhamentos"
-$btnFindShares.Location = New-Object System.Drawing.Point(205, 55)
-$btnFindShares.Size = New-Object System.Drawing.Size(200, 30)
+$btnFindShares.Location = [System.Drawing.Point]::new(205, 55)
+$btnFindShares.Size = [System.Drawing.Size]::new(200, 30)
 $btnFindShares.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnFindShares.ForeColor = [System.Drawing.Color]::White
 $btnFindShares.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $pnlNetSearch.Controls.Add($btnFindShares)
 
-$lblNetAuthNote = New-Object System.Windows.Forms.Label
+$lblNetAuthNote = [System.Windows.Forms.Label]::new()
 $lblNetAuthNote.Text = 'Usuário e senha são opcionais. Deixe em branco para usar o acesso atual do Windows.'
-$lblNetAuthNote.Location = New-Object System.Drawing.Point(15, 88)
-$lblNetAuthNote.Size = New-Object System.Drawing.Size(820, 19)
+$lblNetAuthNote.Location = [System.Drawing.Point]::new(15, 88)
+$lblNetAuthNote.Size = [System.Drawing.Size]::new(820, 19)
 $lblNetAuthNote.ForeColor = [System.Drawing.Color]::DimGray
 $pnlNetSearch.Controls.Add($lblNetAuthNote)
 
@@ -2804,7 +2813,7 @@ $btnToggleManual.Add_Click({
 })
 
 # Tabela de compartilhamentos e impressoras de rede encontrados
-$dgvNetPrinters = New-Object System.Windows.Forms.DataGridView
+$dgvNetPrinters = [System.Windows.Forms.DataGridView]::new()
 $dgvNetPrinters.Dock = [System.Windows.Forms.DockStyle]::Fill
 $dgvNetPrinters.ReadOnly = $true
 $dgvNetPrinters.AllowUserToAddRows = $false
@@ -2823,64 +2832,64 @@ $dgvNetPrinters.BringToFront()
 [void]$dgvNetPrinters.Columns.Add("Status", "Status no Windows")
 
 # Painel Inferior de Conexao
-$pnlNetBottom = New-Object System.Windows.Forms.Panel
+$pnlNetBottom = [System.Windows.Forms.Panel]::new()
 $pnlNetBottom.Dock = [System.Windows.Forms.DockStyle]::Bottom
 $pnlNetBottom.Height = 108
 $tab3.Controls.Add($pnlNetBottom)
 
-$lblNetEndpointMode = New-Object System.Windows.Forms.Label
+$lblNetEndpointMode = [System.Windows.Forms.Label]::new()
 $lblNetEndpointMode.Text = 'Conectar por:'
-$lblNetEndpointMode.Location = New-Object System.Drawing.Point(12, 12)
+$lblNetEndpointMode.Location = [System.Drawing.Point]::new(12, 12)
 $lblNetEndpointMode.AutoSize = $true
 $pnlNetBottom.Controls.Add($lblNetEndpointMode)
 
-$cmbNetEndpointMode = New-Object System.Windows.Forms.ComboBox
+$cmbNetEndpointMode = [System.Windows.Forms.ComboBox]::new()
 $cmbNetEndpointMode.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-$cmbNetEndpointMode.Location = New-Object System.Drawing.Point(100, 8)
-$cmbNetEndpointMode.Size = New-Object System.Drawing.Size(225, 25)
+$cmbNetEndpointMode.Location = [System.Drawing.Point]::new(100, 8)
+$cmbNetEndpointMode.Size = [System.Drawing.Size]::new(225, 25)
 [void]$cmbNetEndpointMode.Items.Add('Nome do computador (hostname)')
 [void]$cmbNetEndpointMode.Items.Add('Endereço IP')
 $cmbNetEndpointMode.SelectedIndex = 0
 $pnlNetBottom.Controls.Add($cmbNetEndpointMode)
 
-$lblNetConnectionPath = New-Object System.Windows.Forms.Label
+$lblNetConnectionPath = [System.Windows.Forms.Label]::new()
 $lblNetConnectionPath.Text = 'Selecione uma impressora para ver o destino.'
-$lblNetConnectionPath.Location = New-Object System.Drawing.Point(338, 12)
-$lblNetConnectionPath.Size = New-Object System.Drawing.Size(550, 22)
+$lblNetConnectionPath.Location = [System.Drawing.Point]::new(338, 12)
+$lblNetConnectionPath.Size = [System.Drawing.Size]::new(550, 22)
 $lblNetConnectionPath.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
 $lblNetConnectionPath.AutoEllipsis = $true
 $pnlNetBottom.Controls.Add($lblNetConnectionPath)
 
-$chkNetDefault = New-Object System.Windows.Forms.CheckBox
+$chkNetDefault = [System.Windows.Forms.CheckBox]::new()
 $chkNetDefault.Text = "Definir como impressora padrao apos conectar"
-$chkNetDefault.Location = New-Object System.Drawing.Point(12, 48)
+$chkNetDefault.Location = [System.Drawing.Point]::new(12, 48)
 $chkNetDefault.AutoSize = $true
 $pnlNetBottom.Controls.Add($chkNetDefault)
 
-$chkNetTestPage = New-Object System.Windows.Forms.CheckBox
+$chkNetTestPage = [System.Windows.Forms.CheckBox]::new()
 $chkNetTestPage.Text = "Imprimir pagina de teste apos conectar"
-$chkNetTestPage.Location = New-Object System.Drawing.Point(12, 72)
+$chkNetTestPage.Location = [System.Drawing.Point]::new(12, 72)
 $chkNetTestPage.AutoSize = $true
 $pnlNetBottom.Controls.Add($chkNetTestPage)
 
-$btnConnectSelected = New-Object System.Windows.Forms.Button
+$btnConnectSelected = [System.Windows.Forms.Button]::new()
 $btnConnectSelected.Text = "Conectar Impressora Selecionada"
-$btnConnectSelected.Size = New-Object System.Drawing.Size(260, 42)
-$btnConnectSelected.Location = New-Object System.Drawing.Point(620, 48)
+$btnConnectSelected.Size = [System.Drawing.Size]::new(260, 42)
+$btnConnectSelected.Location = [System.Drawing.Point]::new(620, 48)
 $btnConnectSelected.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
 $btnConnectSelected.ForeColor = [System.Drawing.Color]::White
 $btnConnectSelected.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnConnectSelected.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btnConnectSelected.Font = [System.Drawing.Font]::new("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $pnlNetBottom.Controls.Add($btnConnectSelected)
 
-$btnLocalPortSelected = New-Object System.Windows.Forms.Button
+$btnLocalPortSelected = [System.Windows.Forms.Button]::new()
 $btnLocalPortSelected.Text = 'Instalar via porta local'
-$btnLocalPortSelected.Size = New-Object System.Drawing.Size(225, 42)
-$btnLocalPortSelected.Location = New-Object System.Drawing.Point(385, 48)
+$btnLocalPortSelected.Size = [System.Drawing.Size]::new(225, 42)
+$btnLocalPortSelected.Location = [System.Drawing.Point]::new(385, 48)
 $btnLocalPortSelected.BackColor = [System.Drawing.Color]::FromArgb(20, 90, 145)
 $btnLocalPortSelected.ForeColor = [System.Drawing.Color]::White
 $btnLocalPortSelected.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnLocalPortSelected.Font = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
+$btnLocalPortSelected.Font = [System.Drawing.Font]::new('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
 $pnlNetBottom.Controls.Add($btnLocalPortSelected)
 
 function Get-SelectedPrinterConnectionTarget {
@@ -3070,7 +3079,7 @@ function Invoke-AutoNetworkScan {
                     if ($status -like "*Ja Instalada*") {
                         $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
                     } else {
-                        $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+                        $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
                     }
                     $count++
                 }
@@ -3102,7 +3111,7 @@ function Invoke-AutoNetworkScan {
                         if ($status -like "*Ja Instalada*") {
                             $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
                         } else {
-                            $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+                            $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
                         }
                         $count++
                     }
@@ -3146,7 +3155,7 @@ function Invoke-AutoNetworkScan {
                     if ($status -like "*Ja Instalada*") {
                         $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
                     } else {
-                        $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+                        $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
                     }
                     $count++
                 }
@@ -3174,7 +3183,7 @@ function Invoke-AutoNetworkScan {
                                 if ($status -like "*Ja Instalada*") {
                                     $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
                                 } else {
-                                    $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+                                    $dgvNetPrinters.Rows[$rIdx].DefaultCellStyle.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
                                 }
                                 $count++
                             }
@@ -3208,25 +3217,25 @@ $btnAutoScan.Add_Click({ Invoke-AutoNetworkScan })
 
 function Wait-PrinterRepairProcess {
     param([System.Diagnostics.Process]$Process, [string]$ErrorCode)
-    $progressForm = New-Object System.Windows.Forms.Form
+    $progressForm = [System.Windows.Forms.Form]::new()
     $progressForm.Text = "Corrigindo erro $ErrorCode"
-    $progressForm.Size = New-Object System.Drawing.Size(415, 150)
+    $progressForm.Size = [System.Drawing.Size]::new(415, 150)
     $progressForm.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $progressForm.ControlBox = $false
     $progressForm.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
-    $progressForm.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    $label = New-Object System.Windows.Forms.Label
+    $progressForm.Font = [System.Drawing.Font]::new("Segoe UI", 9)
+    $label = [System.Windows.Forms.Label]::new()
     $label.Text = "Aplicando ajustes e reiniciando o Spooler. Aguarde..."
-    $label.Location = New-Object System.Drawing.Point(18, 18)
-    $label.Size = New-Object System.Drawing.Size(370, 28)
+    $label.Location = [System.Drawing.Point]::new(18, 18)
+    $label.Size = [System.Drawing.Size]::new(370, 28)
     $progressForm.Controls.Add($label)
-    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar = [System.Windows.Forms.ProgressBar]::new()
     $bar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
     $bar.MarqueeAnimationSpeed = 25
-    $bar.Location = New-Object System.Drawing.Point(18, 58)
-    $bar.Size = New-Object System.Drawing.Size(370, 22)
+    $bar.Location = [System.Drawing.Point]::new(18, 58)
+    $bar.Size = [System.Drawing.Size]::new(370, 22)
     $progressForm.Controls.Add($bar)
-    $timer = New-Object System.Windows.Forms.Timer
+    $timer = [System.Windows.Forms.Timer]::new()
     $timer.Interval = 250
     $timer.Add_Tick({ if ($Process.HasExited) { $progressForm.Close() } })
     $progressForm.Add_Shown({ $timer.Start() })
@@ -3242,51 +3251,51 @@ $btnFix70911b.Add_Click({
         [System.Windows.Forms.MessageBox]::Show($form, "[MODO SIMULAÇÃO] Nenhum ajuste de Registro ou serviço foi executado.", "Simulação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
     }
-    $dialog = New-Object System.Windows.Forms.Form
+    $dialog = [System.Windows.Forms.Form]::new()
     $dialog.Text = "Corrigir erro de impressora"
-    $dialog.Size = New-Object System.Drawing.Size(560, 288)
+    $dialog.Size = [System.Drawing.Size]::new(560, 288)
     $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
     $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
-    $dialog.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    $intro = New-Object System.Windows.Forms.Label
+    $dialog.Font = [System.Drawing.Font]::new("Segoe UI", 9)
+    $intro = [System.Windows.Forms.Label]::new()
     $intro.Text = "Qual erro deseja corrigir neste computador?"
-    $intro.Location = New-Object System.Drawing.Point(18, 15)
-    $intro.Size = New-Object System.Drawing.Size(510, 25)
+    $intro.Location = [System.Drawing.Point]::new(18, 15)
+    $intro.Size = [System.Drawing.Size]::new(510, 25)
     $dialog.Controls.Add($intro)
-    $opt709 = New-Object System.Windows.Forms.RadioButton
+    $opt709 = [System.Windows.Forms.RadioButton]::new()
     $opt709.Text = "Erro 0x00000709"
-    $opt709.Location = New-Object System.Drawing.Point(18, 51)
-    $opt709.Size = New-Object System.Drawing.Size(500, 27)
+    $opt709.Location = [System.Drawing.Point]::new(18, 51)
+    $opt709.Size = [System.Drawing.Size]::new(500, 27)
     $opt709.Checked = $true
     $dialog.Controls.Add($opt709)
-    $desc709 = New-Object System.Windows.Forms.Label
+    $desc709 = [System.Windows.Forms.Label]::new()
     $desc709.Text = "Aplica ajustes RPC compatíveis com a versão do Windows e reinicia o Spooler."
-    $desc709.Location = New-Object System.Drawing.Point(39, 79)
-    $desc709.Size = New-Object System.Drawing.Size(490, 34)
+    $desc709.Location = [System.Drawing.Point]::new(39, 79)
+    $desc709.Size = [System.Drawing.Size]::new(490, 34)
     $dialog.Controls.Add($desc709)
-    $opt11b = New-Object System.Windows.Forms.RadioButton
+    $opt11b = [System.Windows.Forms.RadioButton]::new()
     $opt11b.Text = "Erro 0x0000011b"
-    $opt11b.Location = New-Object System.Drawing.Point(18, 125)
-    $opt11b.Size = New-Object System.Drawing.Size(500, 27)
+    $opt11b.Location = [System.Drawing.Point]::new(18, 125)
+    $opt11b.Size = [System.Drawing.Size]::new(500, 27)
     $dialog.Controls.Add($opt11b)
-    $desc11b = New-Object System.Windows.Forms.Label
+    $desc11b = [System.Windows.Forms.Label]::new()
     $desc11b.Text = "Aplica RpcAuthnLevelPrivacyEnabled=0 neste PC. Se a impressora estiver em outro PC, execute também no host."
-    $desc11b.Location = New-Object System.Drawing.Point(39, 153)
-    $desc11b.Size = New-Object System.Drawing.Size(490, 42)
+    $desc11b.Location = [System.Drawing.Point]::new(39, 153)
+    $desc11b.Size = [System.Drawing.Size]::new(490, 42)
     $dialog.Controls.Add($desc11b)
-    $btnApply = New-Object System.Windows.Forms.Button
+    $btnApply = [System.Windows.Forms.Button]::new()
     $btnApply.Text = "Executar correção"
-    $btnApply.Location = New-Object System.Drawing.Point(279, 207)
-    $btnApply.Size = New-Object System.Drawing.Size(140, 32)
+    $btnApply.Location = [System.Drawing.Point]::new(279, 207)
+    $btnApply.Size = [System.Drawing.Size]::new(140, 32)
     $btnApply.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $dialog.Controls.Add($btnApply)
     $dialog.AcceptButton = $btnApply
-    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel = [System.Windows.Forms.Button]::new()
     $btnCancel.Text = "Cancelar"
-    $btnCancel.Location = New-Object System.Drawing.Point(429, 207)
-    $btnCancel.Size = New-Object System.Drawing.Size(99, 32)
+    $btnCancel.Location = [System.Drawing.Point]::new(429, 207)
+    $btnCancel.Size = [System.Drawing.Size]::new(99, 32)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($btnCancel)
     $dialog.CancelButton = $btnCancel
@@ -3389,58 +3398,58 @@ $btnFixNetwork24H2.Add_Click({
         return
     }
 
-    $dialog = New-Object System.Windows.Forms.Form
+    $dialog = [System.Windows.Forms.Form]::new()
     $dialog.Text = "Corrigir acesso à rede após atualização 24H2"
-    $dialog.Size = New-Object System.Drawing.Size(610, 326)
+    $dialog.Size = [System.Drawing.Size]::new(610, 326)
     $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
     $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
-    $dialog.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $dialog.Font = [System.Drawing.Font]::new("Segoe UI", 9)
 
-    $intro = New-Object System.Windows.Forms.Label
+    $intro = [System.Windows.Forms.Label]::new()
     $intro.Text = "Escolha a função deste PC. A rotina altera configurações SMB deste computador, salva os valores anteriores e gera um script de restauração."
-    $intro.Location = New-Object System.Drawing.Point(18, 15)
-    $intro.Size = New-Object System.Drawing.Size(560, 42)
+    $intro.Location = [System.Drawing.Point]::new(18, 15)
+    $intro.Size = [System.Drawing.Size]::new(560, 42)
     $dialog.Controls.Add($intro)
 
-    $optClient = New-Object System.Windows.Forms.RadioButton
+    $optClient = [System.Windows.Forms.RadioButton]::new()
     $optClient.Text = "Cliente: este PC não acessa a impressora ou pasta compartilhada"
-    $optClient.Location = New-Object System.Drawing.Point(18, 64)
-    $optClient.Size = New-Object System.Drawing.Size(560, 27)
+    $optClient.Location = [System.Drawing.Point]::new(18, 64)
+    $optClient.Size = [System.Drawing.Size]::new(560, 27)
     $optClient.Checked = $true
     $dialog.Controls.Add($optClient)
 
-    $descClient = New-Object System.Windows.Forms.Label
+    $descClient = [System.Windows.Forms.Label]::new()
     $descClient.Text = "Permite acesso SMB como convidado e desativa a exigência de assinatura no cliente. Define AllowInsecureGuestAuth=1."
-    $descClient.Location = New-Object System.Drawing.Point(39, 92)
-    $descClient.Size = New-Object System.Drawing.Size(540, 42)
+    $descClient.Location = [System.Drawing.Point]::new(39, 92)
+    $descClient.Size = [System.Drawing.Size]::new(540, 42)
     $dialog.Controls.Add($descClient)
 
-    $optHost = New-Object System.Windows.Forms.RadioButton
+    $optHost = [System.Windows.Forms.RadioButton]::new()
     $optHost.Text = "Host: este PC compartilha a impressora ou pasta"
-    $optHost.Location = New-Object System.Drawing.Point(18, 145)
-    $optHost.Size = New-Object System.Drawing.Size(560, 27)
+    $optHost.Location = [System.Drawing.Point]::new(18, 145)
+    $optHost.Size = [System.Drawing.Size]::new(560, 27)
     $dialog.Controls.Add($optHost)
 
-    $descHost = New-Object System.Windows.Forms.Label
+    $descHost = [System.Windows.Forms.Label]::new()
     $descHost.Text = "Desativa a exigência de assinatura no servidor. No Windows 11 22H2+, define RpcProtocols=7 para impressão."
-    $descHost.Location = New-Object System.Drawing.Point(39, 173)
-    $descHost.Size = New-Object System.Drawing.Size(540, 42)
+    $descHost.Location = [System.Drawing.Point]::new(39, 173)
+    $descHost.Size = [System.Drawing.Size]::new(540, 42)
     $dialog.Controls.Add($descHost)
 
-    $btnApply = New-Object System.Windows.Forms.Button
+    $btnApply = [System.Windows.Forms.Button]::new()
     $btnApply.Text = "Executar correção"
-    $btnApply.Location = New-Object System.Drawing.Point(328, 233)
-    $btnApply.Size = New-Object System.Drawing.Size(142, 34)
+    $btnApply.Location = [System.Drawing.Point]::new(328, 233)
+    $btnApply.Size = [System.Drawing.Size]::new(142, 34)
     $btnApply.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $dialog.Controls.Add($btnApply)
     $dialog.AcceptButton = $btnApply
 
-    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel = [System.Windows.Forms.Button]::new()
     $btnCancel.Text = "Cancelar"
-    $btnCancel.Location = New-Object System.Drawing.Point(480, 233)
-    $btnCancel.Size = New-Object System.Drawing.Size(100, 34)
+    $btnCancel.Location = [System.Drawing.Point]::new(480, 233)
+    $btnCancel.Size = [System.Drawing.Size]::new(100, 34)
     $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($btnCancel)
     $dialog.CancelButton = $btnCancel
@@ -3607,7 +3616,7 @@ $btnFindShares.Add_Click({
         if ($status -like "*Ja Instalada*") {
             $dgvNetPrinters.Rows[$rIndex].DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
         } else {
-            $dgvNetPrinters.Rows[$rIndex].DefaultCellStyle.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+            $dgvNetPrinters.Rows[$rIndex].DefaultCellStyle.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
         }
         $count++
     }
@@ -3904,60 +3913,60 @@ $btnConnectSelected.Add_Click({
 # ==============================================================================
 # ABA 4: INSTALAR POR CAMINHO MANUAL (\\SERVIDOR\IMPRESSORA)
 # ==============================================================================
-$pnlManual = New-Object System.Windows.Forms.GroupBox
+$pnlManual = [System.Windows.Forms.GroupBox]::new()
 $pnlManual.Text = "Conectar Impressora por Caminho de Rede (UNC)"
-$pnlManual.Location = New-Object System.Drawing.Point(20, 20)
-$pnlManual.Size = New-Object System.Drawing.Size(920, 360)
+$pnlManual.Location = [System.Drawing.Point]::new(20, 20)
+$pnlManual.Size = [System.Drawing.Size]::new(920, 360)
 $tab4.Controls.Add($pnlManual)
 
-$lblManualDesc = New-Object System.Windows.Forms.Label
+$lblManualDesc = [System.Windows.Forms.Label]::new()
 $lblManualDesc.Text = ("Digite o caminho no formato \\NOME_DO_COMPUTADOR\COMPARTILHAMENTO (recomendado para evitar falhas com IP din" + [char]0xE2 + "mico/DHCP):")
-$lblManualDesc.Location = New-Object System.Drawing.Point(20, 30)
+$lblManualDesc.Location = [System.Drawing.Point]::new(20, 30)
 $lblManualDesc.AutoSize = $true
 $pnlManual.Controls.Add($lblManualDesc)
 
-$txtManualUNC = New-Object System.Windows.Forms.TextBox
+$txtManualUNC = [System.Windows.Forms.TextBox]::new()
 $txtManualUNC.Text = "\\SERVIDOR\IMPRESSORA"
-$txtManualUNC.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-$txtManualUNC.Location = New-Object System.Drawing.Point(20, 55)
-$txtManualUNC.Size = New-Object System.Drawing.Size(560, 27)
+$txtManualUNC.Font = [System.Drawing.Font]::new("Segoe UI", 11)
+$txtManualUNC.Location = [System.Drawing.Point]::new(20, 55)
+$txtManualUNC.Size = [System.Drawing.Size]::new(560, 27)
 $pnlManual.Controls.Add($txtManualUNC)
 
-$btnTestPath = New-Object System.Windows.Forms.Button
+$btnTestPath = [System.Windows.Forms.Button]::new()
 $btnTestPath.Text = "Testar Caminho"
-$btnTestPath.Location = New-Object System.Drawing.Point(595, 53)
-$btnTestPath.Size = New-Object System.Drawing.Size(140, 31)
+$btnTestPath.Location = [System.Drawing.Point]::new(595, 53)
+$btnTestPath.Size = [System.Drawing.Size]::new(140, 31)
 $pnlManual.Controls.Add($btnTestPath)
 
-$chkManualDefault = New-Object System.Windows.Forms.CheckBox
+$chkManualDefault = [System.Windows.Forms.CheckBox]::new()
 $chkManualDefault.Text = "Definir como impressora padrão após conectar"
-$chkManualDefault.Location = New-Object System.Drawing.Point(20, 100)
+$chkManualDefault.Location = [System.Drawing.Point]::new(20, 100)
 $chkManualDefault.AutoSize = $true
 $pnlManual.Controls.Add($chkManualDefault)
 
-$chkManualTest = New-Object System.Windows.Forms.CheckBox
+$chkManualTest = [System.Windows.Forms.CheckBox]::new()
 $chkManualTest.Text = "Imprimir página de teste após conectar"
-$chkManualTest.Location = New-Object System.Drawing.Point(20, 130)
+$chkManualTest.Location = [System.Drawing.Point]::new(20, 130)
 $chkManualTest.AutoSize = $true
 $pnlManual.Controls.Add($chkManualTest)
 
-$btnManualConnect = New-Object System.Windows.Forms.Button
+$btnManualConnect = [System.Windows.Forms.Button]::new()
 $btnManualConnect.Text = "Conectar Agora"
-$btnManualConnect.Location = New-Object System.Drawing.Point(20, 170)
-$btnManualConnect.Size = New-Object System.Drawing.Size(200, 38)
+$btnManualConnect.Location = [System.Drawing.Point]::new(20, 170)
+$btnManualConnect.Size = [System.Drawing.Size]::new(200, 38)
 $btnManualConnect.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
 $btnManualConnect.ForeColor = [System.Drawing.Color]::White
 $btnManualConnect.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnManualConnect.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btnManualConnect.Font = [System.Drawing.Font]::new("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $pnlManual.Controls.Add($btnManualConnect)
 
-$txtPathDiag = New-Object System.Windows.Forms.TextBox
+$txtPathDiag = [System.Windows.Forms.TextBox]::new()
 $txtPathDiag.Multiline = $true
 $txtPathDiag.ReadOnly = $true
 $txtPathDiag.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
-$txtPathDiag.Location = New-Object System.Drawing.Point(20, 220)
-$txtPathDiag.Size = New-Object System.Drawing.Size(875, 120)
-$txtPathDiag.Font = New-Object System.Drawing.Font("Consolas", 9)
+$txtPathDiag.Location = [System.Drawing.Point]::new(20, 220)
+$txtPathDiag.Size = [System.Drawing.Size]::new(875, 120)
+$txtPathDiag.Font = [System.Drawing.Font]::new("Consolas", 9)
 $txtPathDiag.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
 $pnlManual.Controls.Add($txtPathDiag)
 
@@ -4051,85 +4060,85 @@ $btnManualConnect.Add_Click({
 # ==============================================================================
 # ABA 6: INSTALAR POR ENDERECO IP (TCP/IP DIRETO)
 # ==============================================================================
-$pnlIP = New-Object System.Windows.Forms.GroupBox
+$pnlIP = [System.Windows.Forms.GroupBox]::new()
 $pnlIP.Text = "Instalação de Impressora TCP/IP (Rede Direta)"
-$pnlIP.Location = New-Object System.Drawing.Point(20, 20)
-$pnlIP.Size = New-Object System.Drawing.Size(920, 480)
+$pnlIP.Location = [System.Drawing.Point]::new(20, 20)
+$pnlIP.Size = [System.Drawing.Size]::new(920, 480)
 $tab5.Controls.Add($pnlIP)
 
-$lblIPAddr = New-Object System.Windows.Forms.Label
+$lblIPAddr = [System.Windows.Forms.Label]::new()
 $lblIPAddr.Text = "Endereço IPv4 da Impressora:"
-$lblIPAddr.Location = New-Object System.Drawing.Point(20, 30)
+$lblIPAddr.Location = [System.Drawing.Point]::new(20, 30)
 $lblIPAddr.AutoSize = $true
 $pnlIP.Controls.Add($lblIPAddr)
 
-$txtIPAddr = New-Object System.Windows.Forms.TextBox
+$txtIPAddr = [System.Windows.Forms.TextBox]::new()
 $txtIPAddr.Text = ""
-$txtIPAddr.Location = New-Object System.Drawing.Point(20, 52)
-$txtIPAddr.Size = New-Object System.Drawing.Size(200, 23)
+$txtIPAddr.Location = [System.Drawing.Point]::new(20, 52)
+$txtIPAddr.Size = [System.Drawing.Size]::new(200, 23)
 $pnlIP.Controls.Add($txtIPAddr)
 
-$btnTestIPPort = New-Object System.Windows.Forms.Button
+$btnTestIPPort = [System.Windows.Forms.Button]::new()
 $btnTestIPPort.Text = "Testar Comunicação IP e Porta"
-$btnTestIPPort.Location = New-Object System.Drawing.Point(235, 50)
-$btnTestIPPort.Size = New-Object System.Drawing.Size(210, 27)
+$btnTestIPPort.Location = [System.Drawing.Point]::new(235, 50)
+$btnTestIPPort.Size = [System.Drawing.Size]::new(210, 27)
 $pnlIP.Controls.Add($btnTestIPPort)
 
-$lblIPPrinterName = New-Object System.Windows.Forms.Label
+$lblIPPrinterName = [System.Windows.Forms.Label]::new()
 $lblIPPrinterName.Text = "Nome de Exibição da Impressora:"
-$lblIPPrinterName.Location = New-Object System.Drawing.Point(20, 90)
+$lblIPPrinterName.Location = [System.Drawing.Point]::new(20, 90)
 $lblIPPrinterName.AutoSize = $true
 $pnlIP.Controls.Add($lblIPPrinterName)
 
-$txtIPPrinterName = New-Object System.Windows.Forms.TextBox
+$txtIPPrinterName = [System.Windows.Forms.TextBox]::new()
 $txtIPPrinterName.Text = "Impressora_Rede_TCP"
-$txtIPPrinterName.Location = New-Object System.Drawing.Point(20, 112)
-$txtIPPrinterName.Size = New-Object System.Drawing.Size(320, 23)
+$txtIPPrinterName.Location = [System.Drawing.Point]::new(20, 112)
+$txtIPPrinterName.Size = [System.Drawing.Size]::new(320, 23)
 $pnlIP.Controls.Add($txtIPPrinterName)
 
 # Protocolo RAW vs LPR
-$lblProto = New-Object System.Windows.Forms.Label
+$lblProto = [System.Windows.Forms.Label]::new()
 $lblProto.Text = "Protocolo de Comunicação:"
-$lblProto.Location = New-Object System.Drawing.Point(20, 150)
+$lblProto.Location = [System.Drawing.Point]::new(20, 150)
 $lblProto.AutoSize = $true
 $pnlIP.Controls.Add($lblProto)
 
-$rbProtoRAW = New-Object System.Windows.Forms.RadioButton
+$rbProtoRAW = [System.Windows.Forms.RadioButton]::new()
 $rbProtoRAW.Text = "RAW (Padrão para impressoras térmicas e de rede)"
-$rbProtoRAW.Location = New-Object System.Drawing.Point(20, 172)
+$rbProtoRAW.Location = [System.Drawing.Point]::new(20, 172)
 $rbProtoRAW.AutoSize = $true
 $rbProtoRAW.Checked = $true
 $pnlIP.Controls.Add($rbProtoRAW)
 
-$rbProtoLPR = New-Object System.Windows.Forms.RadioButton
+$rbProtoLPR = [System.Windows.Forms.RadioButton]::new()
 $rbProtoLPR.Text = "LPR / LPD"
-$rbProtoLPR.Location = New-Object System.Drawing.Point(360, 172)
+$rbProtoLPR.Location = [System.Drawing.Point]::new(360, 172)
 $rbProtoLPR.AutoSize = $true
 $pnlIP.Controls.Add($rbProtoLPR)
 
-$lblPortNum = New-Object System.Windows.Forms.Label
+$lblPortNum = [System.Windows.Forms.Label]::new()
 $lblPortNum.Text = "Porta TCP (RAW):"
-$lblPortNum.Location = New-Object System.Drawing.Point(20, 205)
+$lblPortNum.Location = [System.Drawing.Point]::new(20, 205)
 $lblPortNum.AutoSize = $true
 $pnlIP.Controls.Add($lblPortNum)
 
-$txtPortNum = New-Object System.Windows.Forms.TextBox
+$txtPortNum = [System.Windows.Forms.TextBox]::new()
 $txtPortNum.Text = "9100"
-$txtPortNum.Location = New-Object System.Drawing.Point(130, 202)
-$txtPortNum.Size = New-Object System.Drawing.Size(80, 23)
+$txtPortNum.Location = [System.Drawing.Point]::new(130, 202)
+$txtPortNum.Size = [System.Drawing.Size]::new(80, 23)
 $pnlIP.Controls.Add($txtPortNum)
 
-$lblQueueName = New-Object System.Windows.Forms.Label
+$lblQueueName = [System.Windows.Forms.Label]::new()
 $lblQueueName.Text = "Fila LPR:"
-$lblQueueName.Location = New-Object System.Drawing.Point(235, 205)
+$lblQueueName.Location = [System.Drawing.Point]::new(235, 205)
 $lblQueueName.AutoSize = $true
 $pnlIP.Controls.Add($lblQueueName)
 
-$txtQueueName = New-Object System.Windows.Forms.TextBox
+$txtQueueName = [System.Windows.Forms.TextBox]::new()
 $txtQueueName.Text = "lp"
 $txtQueueName.Enabled = $false
-$txtQueueName.Location = New-Object System.Drawing.Point(300, 202)
-$txtQueueName.Size = New-Object System.Drawing.Size(100, 23)
+$txtQueueName.Location = [System.Drawing.Point]::new(300, 202)
+$txtQueueName.Size = [System.Drawing.Size]::new(100, 23)
 $pnlIP.Controls.Add($txtQueueName)
 
 $rbProtoRAW.Add_CheckedChanged({
@@ -4138,52 +4147,52 @@ $rbProtoRAW.Add_CheckedChanged({
 })
 
 # Seleção de Driver NATIVO já instalado no Windows
-$lblDriver = New-Object System.Windows.Forms.Label
+$lblDriver = [System.Windows.Forms.Label]::new()
 $lblDriver.Text = "Driver já instalado no Windows (Obrigatório selecionar um homologado):"
-$lblDriver.Location = New-Object System.Drawing.Point(20, 240)
+$lblDriver.Location = [System.Drawing.Point]::new(20, 240)
 $lblDriver.AutoSize = $true
 $pnlIP.Controls.Add($lblDriver)
 
-$cmbDrivers = New-Object System.Windows.Forms.ComboBox
+$cmbDrivers = [System.Windows.Forms.ComboBox]::new()
 $cmbDrivers.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
-$cmbDrivers.Location = New-Object System.Drawing.Point(20, 262)
-$cmbDrivers.Size = New-Object System.Drawing.Size(450, 23)
+$cmbDrivers.Location = [System.Drawing.Point]::new(20, 262)
+$cmbDrivers.Size = [System.Drawing.Size]::new(450, 23)
 $pnlIP.Controls.Add($cmbDrivers)
 
-$btnRefreshDrivers = New-Object System.Windows.Forms.Button
+$btnRefreshDrivers = [System.Windows.Forms.Button]::new()
 $btnRefreshDrivers.Text = "Recarregar Drivers"
-$btnRefreshDrivers.Location = New-Object System.Drawing.Point(480, 260)
-$btnRefreshDrivers.Size = New-Object System.Drawing.Size(140, 27)
+$btnRefreshDrivers.Location = [System.Drawing.Point]::new(480, 260)
+$btnRefreshDrivers.Size = [System.Drawing.Size]::new(140, 27)
 $pnlIP.Controls.Add($btnRefreshDrivers)
 
-$lblDriverWarning = New-Object System.Windows.Forms.Label
+$lblDriverWarning = [System.Windows.Forms.Label]::new()
 $lblDriverWarning.Text = "REQUISITO DE SEGURANÇA: Esta ferramenta NÃO baixa drivers da internet nem utiliza drivers desconhecidos.`nCaso o modelo desejado (Bematech, Elgin, Epson, Argox, Zebra) não conste acima, instale primeiro o pacote oficial do fabricante."
 $lblDriverWarning.ForeColor = [System.Drawing.Color]::DarkRed
-$lblDriverWarning.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$lblDriverWarning.Location = New-Object System.Drawing.Point(20, 295)
-$lblDriverWarning.Size = New-Object System.Drawing.Size(860, 35)
+$lblDriverWarning.Font = [System.Drawing.Font]::new("Segoe UI", 8.5)
+$lblDriverWarning.Location = [System.Drawing.Point]::new(20, 295)
+$lblDriverWarning.Size = [System.Drawing.Size]::new(860, 35)
 $pnlIP.Controls.Add($lblDriverWarning)
 
-$chkIPDefault = New-Object System.Windows.Forms.CheckBox
+$chkIPDefault = [System.Windows.Forms.CheckBox]::new()
 $chkIPDefault.Text = "Definir como impressora padrão após instalar"
-$chkIPDefault.Location = New-Object System.Drawing.Point(20, 335)
+$chkIPDefault.Location = [System.Drawing.Point]::new(20, 335)
 $chkIPDefault.AutoSize = $true
 $pnlIP.Controls.Add($chkIPDefault)
 
-$chkIPTest = New-Object System.Windows.Forms.CheckBox
+$chkIPTest = [System.Windows.Forms.CheckBox]::new()
 $chkIPTest.Text = "Imprimir teste após instalar"
-$chkIPTest.Location = New-Object System.Drawing.Point(20, 360)
+$chkIPTest.Location = [System.Drawing.Point]::new(20, 360)
 $chkIPTest.AutoSize = $true
 $pnlIP.Controls.Add($chkIPTest)
 
-$btnInstallIPPrinter = New-Object System.Windows.Forms.Button
+$btnInstallIPPrinter = [System.Windows.Forms.Button]::new()
 $btnInstallIPPrinter.Text = "Criar Porta e Instalar Impressora TCP/IP"
-$btnInstallIPPrinter.Location = New-Object System.Drawing.Point(20, 400)
-$btnInstallIPPrinter.Size = New-Object System.Drawing.Size(300, 40)
+$btnInstallIPPrinter.Location = [System.Drawing.Point]::new(20, 400)
+$btnInstallIPPrinter.Size = [System.Drawing.Size]::new(300, 40)
 $btnInstallIPPrinter.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnInstallIPPrinter.ForeColor = [System.Drawing.Color]::White
 $btnInstallIPPrinter.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnInstallIPPrinter.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+$btnInstallIPPrinter.Font = [System.Drawing.Font]::new("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
 $pnlIP.Controls.Add($btnInstallIPPrinter)
 
 function Populate-DriversList {
@@ -4302,33 +4311,33 @@ $btnInstallIPPrinter.Add_Click({
 # ==============================================================================
 # ABA 7: FILA E SPOOLER (DIAGNOSTICO E CORRECAO)
 # ==============================================================================
-$pnlSpoolStatus = New-Object System.Windows.Forms.GroupBox
+$pnlSpoolStatus = [System.Windows.Forms.GroupBox]::new()
 $pnlSpoolStatus.Text = "Status do Subsistema Spooler"
 $pnlSpoolStatus.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlSpoolStatus.Height = 70
 $tab6.Controls.Add($pnlSpoolStatus)
 
-$lblSpoolInfo = New-Object System.Windows.Forms.Label
+$lblSpoolInfo = [System.Windows.Forms.Label]::new()
 $lblSpoolInfo.Text = "Status: Aguardando verificação..."
-$lblSpoolInfo.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$lblSpoolInfo.Location = New-Object System.Drawing.Point(15, 25)
+$lblSpoolInfo.Font = [System.Drawing.Font]::new("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$lblSpoolInfo.Location = [System.Drawing.Point]::new(15, 25)
 $lblSpoolInfo.AutoSize = $true
 $pnlSpoolStatus.Controls.Add($lblSpoolInfo)
 
-$btnRefreshSpoolTab = New-Object System.Windows.Forms.Button
+$btnRefreshSpoolTab = [System.Windows.Forms.Button]::new()
 $btnRefreshSpoolTab.Text = "Atualizar Fila e Status"
-$btnRefreshSpoolTab.Location = New-Object System.Drawing.Point(740, 20)
-$btnRefreshSpoolTab.Size = New-Object System.Drawing.Size(180, 32)
+$btnRefreshSpoolTab.Location = [System.Drawing.Point]::new(740, 20)
+$btnRefreshSpoolTab.Size = [System.Drawing.Size]::new(180, 32)
 $pnlSpoolStatus.Controls.Add($btnRefreshSpoolTab)
 
 # Tabela de Documentos Presos
-$pnlQueueGroup = New-Object System.Windows.Forms.GroupBox
+$pnlQueueGroup = [System.Windows.Forms.GroupBox]::new()
 $pnlQueueGroup.Text = "Documentos Presos nas Filas de Impressão"
 $pnlQueueGroup.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlQueueGroup.Height = 180
 $tab6.Controls.Add($pnlQueueGroup)
 
-$dgvQueue = New-Object System.Windows.Forms.DataGridView
+$dgvQueue = [System.Windows.Forms.DataGridView]::new()
 $dgvQueue.Dock = [System.Windows.Forms.DockStyle]::Fill
 $dgvQueue.ReadOnly = $true
 $dgvQueue.AllowUserToAddRows = $false
@@ -4347,53 +4356,53 @@ $pnlQueueGroup.Controls.Add($dgvQueue)
 [void]$dgvQueue.Columns.Add("Status", "Status")
 
 # Painel com Opções Selecionáveis para Correção de Problemas
-$pnlFixChecklist = New-Object System.Windows.Forms.GroupBox
+$pnlFixChecklist = [System.Windows.Forms.GroupBox]::new()
 $pnlFixChecklist.Text = "Ações para Correção de Problemas Comuns (Selecione as ações desejadas antes de executar)"
 $pnlFixChecklist.Dock = [System.Windows.Forms.DockStyle]::Fill
 $tab6.Controls.Add($pnlFixChecklist)
 $pnlFixChecklist.BringToFront()
 
-$chkOptRestartSpooler = New-Object System.Windows.Forms.CheckBox
+$chkOptRestartSpooler = [System.Windows.Forms.CheckBox]::new()
 $chkOptRestartSpooler.Text = "1. Reiniciar serviço Spooler de Impressão (Stop/Start)"
-$chkOptRestartSpooler.Location = New-Object System.Drawing.Point(20, 25); $chkOptRestartSpooler.AutoSize = $true; $chkOptRestartSpooler.Checked = $true
+$chkOptRestartSpooler.Location = [System.Drawing.Point]::new(20, 25); $chkOptRestartSpooler.AutoSize = $true; $chkOptRestartSpooler.Checked = $true
 $pnlFixChecklist.Controls.Add($chkOptRestartSpooler)
 
-$chkOptAutoStart = New-Object System.Windows.Forms.CheckBox
+$chkOptAutoStart = [System.Windows.Forms.CheckBox]::new()
 $chkOptAutoStart.Text = "2. Configurar inicialização do Spooler como Automático (sc.exe config spooler start= auto)"
-$chkOptAutoStart.Location = New-Object System.Drawing.Point(20, 50); $chkOptAutoStart.AutoSize = $true; $chkOptAutoStart.Checked = $true
+$chkOptAutoStart.Location = [System.Drawing.Point]::new(20, 50); $chkOptAutoStart.AutoSize = $true; $chkOptAutoStart.Checked = $true
 $pnlFixChecklist.Controls.Add($chkOptAutoStart)
 
-$chkOptUnpause = New-Object System.Windows.Forms.CheckBox
+$chkOptUnpause = [System.Windows.Forms.CheckBox]::new()
 $chkOptUnpause.Text = "3. Retirar estado 'Pausada' de todas as impressoras instaladas"
-$chkOptUnpause.Location = New-Object System.Drawing.Point(20, 75); $chkOptUnpause.AutoSize = $true; $chkOptUnpause.Checked = $true
+$chkOptUnpause.Location = [System.Drawing.Point]::new(20, 75); $chkOptUnpause.AutoSize = $true; $chkOptUnpause.Checked = $true
 $pnlFixChecklist.Controls.Add($chkOptUnpause)
 
-$chkOptClearOffline = New-Object System.Windows.Forms.CheckBox
+$chkOptClearOffline = [System.Windows.Forms.CheckBox]::new()
 $chkOptClearOffline.Text = "4. Retirar modo 'Trabalhar Offline' de todas as impressoras instaladas"
-$chkOptClearOffline.Location = New-Object System.Drawing.Point(20, 100); $chkOptClearOffline.AutoSize = $true; $chkOptClearOffline.Checked = $true
+$chkOptClearOffline.Location = [System.Drawing.Point]::new(20, 100); $chkOptClearOffline.AutoSize = $true; $chkOptClearOffline.Checked = $true
 $pnlFixChecklist.Controls.Add($chkOptClearOffline)
 
-$chkOptPurgeFiles = New-Object System.Windows.Forms.CheckBox
+$chkOptPurgeFiles = [System.Windows.Forms.CheckBox]::new()
 $chkOptPurgeFiles.Text = "5. Limpar arquivos travados da pasta de spool (*.SPL e *.SHD) [Cancela todos os trabalhos pendentes]"
 $chkOptPurgeFiles.ForeColor = [System.Drawing.Color]::DarkRed
-$chkOptPurgeFiles.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-$chkOptPurgeFiles.Location = New-Object System.Drawing.Point(20, 125); $chkOptPurgeFiles.AutoSize = $true; $chkOptPurgeFiles.Checked = $false
+$chkOptPurgeFiles.Font = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
+$chkOptPurgeFiles.Location = [System.Drawing.Point]::new(20, 125); $chkOptPurgeFiles.AutoSize = $true; $chkOptPurgeFiles.Checked = $false
 $pnlFixChecklist.Controls.Add($chkOptPurgeFiles)
 
-$btnExecuteFixes = New-Object System.Windows.Forms.Button
+$btnExecuteFixes = [System.Windows.Forms.Button]::new()
 $btnExecuteFixes.Text = "Executar Ações Selecionadas de Correção"
-$btnExecuteFixes.Location = New-Object System.Drawing.Point(20, 165)
-$btnExecuteFixes.Size = New-Object System.Drawing.Size(280, 38)
+$btnExecuteFixes.Location = [System.Drawing.Point]::new(20, 165)
+$btnExecuteFixes.Size = [System.Drawing.Size]::new(280, 38)
 $btnExecuteFixes.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
 $btnExecuteFixes.ForeColor = [System.Drawing.Color]::White
 $btnExecuteFixes.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnExecuteFixes.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$btnExecuteFixes.Font = [System.Drawing.Font]::new("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
 $pnlFixChecklist.Controls.Add($btnExecuteFixes)
 
-$btnQuickPurge = New-Object System.Windows.Forms.Button
+$btnQuickPurge = [System.Windows.Forms.Button]::new()
 $btnQuickPurge.Text = "Limpar Fila Imediatamente (Purgar Spool)"
-$btnQuickPurge.Location = New-Object System.Drawing.Point(315, 165)
-$btnQuickPurge.Size = New-Object System.Drawing.Size(260, 38)
+$btnQuickPurge.Location = [System.Drawing.Point]::new(315, 165)
+$btnQuickPurge.Size = [System.Drawing.Size]::new(260, 38)
 $btnQuickPurge.ForeColor = [System.Drawing.Color]::DarkRed
 $pnlFixChecklist.Controls.Add($btnQuickPurge)
 
@@ -4509,41 +4518,41 @@ $btnQuickPurge.Add_Click({
 # ==============================================================================
 # ABA 8: AREA DE TRABALHO REMOTA (RDP / TERMINAL SERVICES)
 # ==============================================================================
-$pnlRDPHeader = New-Object System.Windows.Forms.GroupBox
+$pnlRDPHeader = [System.Windows.Forms.GroupBox]::new()
 $pnlRDPHeader.Text = "Diagnóstico da Sessão RDP"
 $pnlRDPHeader.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlRDPHeader.Height = 85
 $tab7.Controls.Add($pnlRDPHeader)
 
-$lblRDPSession = New-Object System.Windows.Forms.Label
-$lblRDPSession.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-$lblRDPSession.Location = New-Object System.Drawing.Point(15, 25)
+$lblRDPSession = [System.Windows.Forms.Label]::new()
+$lblRDPSession.Font = [System.Drawing.Font]::new("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+$lblRDPSession.Location = [System.Drawing.Point]::new(15, 25)
 $lblRDPSession.AutoSize = $true
 $pnlRDPHeader.Controls.Add($lblRDPSession)
 
-$lblRDPInfoExtra = New-Object System.Windows.Forms.Label
-$lblRDPInfoExtra.Location = New-Object System.Drawing.Point(15, 50)
+$lblRDPInfoExtra = [System.Windows.Forms.Label]::new()
+$lblRDPInfoExtra.Location = [System.Drawing.Point]::new(15, 50)
 $lblRDPInfoExtra.AutoSize = $true
 $lblRDPInfoExtra.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
 $pnlRDPHeader.Controls.Add($lblRDPInfoExtra)
 
-$btnRefreshRDP = New-Object System.Windows.Forms.Button
+$btnRefreshRDP = [System.Windows.Forms.Button]::new()
 $btnRefreshRDP.Text = "Atualizar RDP"
-$btnRefreshRDP.Location = New-Object System.Drawing.Point(620, 25)
-$btnRefreshRDP.Size = New-Object System.Drawing.Size(120, 32)
+$btnRefreshRDP.Location = [System.Drawing.Point]::new(620, 25)
+$btnRefreshRDP.Size = [System.Drawing.Size]::new(120, 32)
 $pnlRDPHeader.Controls.Add($btnRefreshRDP)
 
-$btnOpenControlPrn = New-Object System.Windows.Forms.Button
+$btnOpenControlPrn = [System.Windows.Forms.Button]::new()
 $btnOpenControlPrn.Text = "Abrir Impressoras do Windows"
-$btnOpenControlPrn.Location = New-Object System.Drawing.Point(750, 25)
-$btnOpenControlPrn.Size = New-Object System.Drawing.Size(180, 32)
+$btnOpenControlPrn.Location = [System.Drawing.Point]::new(750, 25)
+$btnOpenControlPrn.Size = [System.Drawing.Size]::new(180, 32)
 $pnlRDPHeader.Controls.Add($btnOpenControlPrn)
 
 $btnOpenControlPrn.Add_Click({
     Start-Process "control.exe" "printers"
 })
 
-$dgvRDP = New-Object System.Windows.Forms.DataGridView
+$dgvRDP = [System.Windows.Forms.DataGridView]::new()
 $dgvRDP.Dock = [System.Windows.Forms.DockStyle]::Top
 $dgvRDP.Height = 220
 $dgvRDP.ReadOnly = $true
@@ -4559,12 +4568,12 @@ $tab7.Controls.Add($dgvRDP)
 [void]$dgvRDP.Columns.Add("Port", "Porta (TS / Local)")
 [void]$dgvRDP.Columns.Add("Duplicate", "Alerta de Duplicação")
 
-$txtRDPGuide = New-Object System.Windows.Forms.TextBox
+$txtRDPGuide = [System.Windows.Forms.TextBox]::new()
 $txtRDPGuide.Multiline = $true
 $txtRDPGuide.ReadOnly = $true
 $txtRDPGuide.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
 $txtRDPGuide.Dock = [System.Windows.Forms.DockStyle]::Fill
-$txtRDPGuide.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$txtRDPGuide.Font = [System.Drawing.Font]::new("Segoe UI", 9)
 $txtRDPGuide.BackColor = [System.Drawing.Color]::FromArgb(250, 252, 255)
 $tab7.Controls.Add($txtRDPGuide)
 $txtRDPGuide.BringToFront()
@@ -4625,58 +4634,58 @@ $btnRefreshRDP.Add_Click({ Update-RDPDiagnostics })
 # ==============================================================================
 # ABA 9: RELATORIO E LOGS
 # ==============================================================================
-$pnlLogsTop = New-Object System.Windows.Forms.Panel
+$pnlLogsTop = [System.Windows.Forms.Panel]::new()
 $pnlLogsTop.Dock = [System.Windows.Forms.DockStyle]::Top
 $pnlLogsTop.Height = 45
 $tab8.Controls.Add($pnlLogsTop)
 
-$btnRefreshLogView = New-Object System.Windows.Forms.Button
+$btnRefreshLogView = [System.Windows.Forms.Button]::new()
 $btnRefreshLogView.Text = "Atualizar Log"
-$btnRefreshLogView.Size = New-Object System.Drawing.Size(110, 32)
-$btnRefreshLogView.Location = New-Object System.Drawing.Point(10, 6)
+$btnRefreshLogView.Size = [System.Drawing.Size]::new(110, 32)
+$btnRefreshLogView.Location = [System.Drawing.Point]::new(10, 6)
 $pnlLogsTop.Controls.Add($btnRefreshLogView)
 
-$btnCopyLog = New-Object System.Windows.Forms.Button
+$btnCopyLog = [System.Windows.Forms.Button]::new()
 $btnCopyLog.Text = "Copiar Log Completo"
-$btnCopyLog.Size = New-Object System.Drawing.Size(150, 32)
-$btnCopyLog.Location = New-Object System.Drawing.Point(130, 6)
+$btnCopyLog.Size = [System.Drawing.Size]::new(150, 32)
+$btnCopyLog.Location = [System.Drawing.Point]::new(130, 6)
 $pnlLogsTop.Controls.Add($btnCopyLog)
 
-$btnExportReport = New-Object System.Windows.Forms.Button
+$btnExportReport = [System.Windows.Forms.Button]::new()
 $btnExportReport.Text = "Exportar Relatório..."
-$btnExportReport.Size = New-Object System.Drawing.Size(140, 32)
-$btnExportReport.Location = New-Object System.Drawing.Point(290, 6)
+$btnExportReport.Size = [System.Drawing.Size]::new(140, 32)
+$btnExportReport.Location = [System.Drawing.Point]::new(290, 6)
 $pnlLogsTop.Controls.Add($btnExportReport)
 
-$btnOpenLogsFolder = New-Object System.Windows.Forms.Button
+$btnOpenLogsFolder = [System.Windows.Forms.Button]::new()
 $btnOpenLogsFolder.Text = "Abrir Pasta Logs"
-$btnOpenLogsFolder.Size = New-Object System.Drawing.Size(130, 32)
-$btnOpenLogsFolder.Location = New-Object System.Drawing.Point(440, 6)
+$btnOpenLogsFolder.Size = [System.Drawing.Size]::new(130, 32)
+$btnOpenLogsFolder.Location = [System.Drawing.Point]::new(440, 6)
 $pnlLogsTop.Controls.Add($btnOpenLogsFolder)
 
-$btnClearOldLogs = New-Object System.Windows.Forms.Button
+$btnClearOldLogs = [System.Windows.Forms.Button]::new()
 $btnClearOldLogs.Text = "Limpar Logs Antigos (+7 dias)"
-$btnClearOldLogs.Size = New-Object System.Drawing.Size(180, 32)
-$btnClearOldLogs.Location = New-Object System.Drawing.Point(580, 6)
+$btnClearOldLogs.Size = [System.Drawing.Size]::new(180, 32)
+$btnClearOldLogs.Location = [System.Drawing.Point]::new(580, 6)
 $pnlLogsTop.Controls.Add($btnClearOldLogs)
 
-$btnCleanAndExit = New-Object System.Windows.Forms.Button
+$btnCleanAndExit = [System.Windows.Forms.Button]::new()
 $btnCleanAndExit.Text = "Encerrar e Limpar Temporários"
-$btnCleanAndExit.Size = New-Object System.Drawing.Size(190, 32)
-$btnCleanAndExit.Location = New-Object System.Drawing.Point(770, 6)
+$btnCleanAndExit.Size = [System.Drawing.Size]::new(190, 32)
+$btnCleanAndExit.Location = [System.Drawing.Point]::new(770, 6)
 $btnCleanAndExit.BackColor = [System.Drawing.Color]::FromArgb(200, 50, 50)
 $btnCleanAndExit.ForeColor = [System.Drawing.Color]::White
 $btnCleanAndExit.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-$btnCleanAndExit.Font = New-Object System.Drawing.Font("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
+$btnCleanAndExit.Font = [System.Drawing.Font]::new("Segoe UI", 8.5, [System.Drawing.FontStyle]::Bold)
 $pnlLogsTop.Controls.Add($btnCleanAndExit)
 
-$script:txtLogViewer = New-Object System.Windows.Forms.TextBox
+$script:txtLogViewer = [System.Windows.Forms.TextBox]::new()
 $script:txtLogViewer.Multiline = $true
 $script:txtLogViewer.ReadOnly = $true
 $script:txtLogViewer.ScrollBars = [System.Windows.Forms.ScrollBars]::Both
 $script:txtLogViewer.WordWrap = $false
 $script:txtLogViewer.Dock = [System.Windows.Forms.DockStyle]::Fill
-$script:txtLogViewer.Font = New-Object System.Drawing.Font("Consolas", 9)
+$script:txtLogViewer.Font = [System.Drawing.Font]::new("Consolas", 9)
 $script:txtLogViewer.BackColor = [System.Drawing.Color]::FromArgb(20, 24, 30)
 $script:txtLogViewer.ForeColor = [System.Drawing.Color]::FromArgb(220, 230, 240)
 $tab8.Controls.Add($script:txtLogViewer)
@@ -4703,7 +4712,7 @@ $btnCopyLog.Add_Click({
 })
 
 $btnExportReport.Add_Click({
-    $sfd = New-Object System.Windows.Forms.SaveFileDialog
+    $sfd = [System.Windows.Forms.SaveFileDialog]::new()
     $sfd.Filter = "Arquivos de Log (*.log;*.txt)|*.log;*.txt"
     $sfd.FileName = "Relatorio_Atendimento_$($env:COMPUTERNAME)_$((Get-Date).ToString('yyyyMMdd')).txt"
     if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
@@ -4759,10 +4768,24 @@ $btnCleanAndExit.Add_Click({
 # ==============================================================================
 # CARREGAMENTO INICIAL DE DADOS AO ABRIR O FORMULÁRIO
 # ==============================================================================
-$tabControl.Add_SelectedIndexChanged({
-
+$script:uiShown = $false
+$script:printerTabDataLoaded = @{}
+function Initialize-SelectedPrinterTab {
+    # Nenhuma consulta de impressoras/driver participa da abertura da janela.
+    if (-not $script:uiShown) { return }
+    if ($tabControl.SelectedTab -eq $tab2 -and -not $script:printerTabDataLoaded.Local) {
+        $script:printerTabDataLoaded.Local = $true
+        try { Refresh-PrintersGrid } catch { $script:printerTabDataLoaded.Local = $false; throw }
+    }
+    if ($tabControl.SelectedTab -eq $tab5 -and -not $script:printerTabDataLoaded.Drivers) {
+        $script:printerTabDataLoaded.Drivers = $true
+        try { Populate-DriversList } catch { $script:printerTabDataLoaded.Drivers = $false; throw }
+    }
     if ($tabControl.SelectedTab -eq $tab6) { Update-SpoolTabStatus }
     if ($tabControl.SelectedTab -eq $tab7) { Update-RDPDiagnostics }
+}
+$tabControl.Add_SelectedIndexChanged({
+    Initialize-SelectedPrinterTab
 })
 
 $interfacePath = if ($PrinterConnectionPath) { Join-Path (Split-Path -Parent $PrinterConnectionPath) 'INTERFACE.ps1' } else { Join-Path $PSScriptRoot 'scripts\INTERFACE.ps1' }
@@ -4770,12 +4793,14 @@ if (Test-Path -LiteralPath $interfacePath) {
     . $interfacePath
     Set-PrinterAppLayout
 }
+$form.ResumeLayout($true)
 
 $form.Add_Shown({
-
-    Refresh-PrintersGrid
+    $script:uiShown = $true
     Reload-LogViewer
     Update-StatusStrip -Text "Assistente de Impressoras pronto para uso." -Color "DarkGreen" -Tag "PRONTO"
+    $script:startupClock.Stop()
+    Write-AppLog -Message "Interface pronta em $($script:startupClock.ElapsedMilliseconds) ms; dados das abas serão consultados sob demanda." -Level INFO
 })
 
 # Executar a aplicação Windows Forms

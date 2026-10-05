@@ -29,7 +29,7 @@ function Set-PrinterControlsTheme {
             $control.ColumnHeadersHeight=38
             $control.ColumnHeadersDefaultCellStyle.BackColor=$soft
             $control.ColumnHeadersDefaultCellStyle.ForeColor=$ink
-            $control.ColumnHeadersDefaultCellStyle.Font=New-Object Drawing.Font('Segoe UI',9,[Drawing.FontStyle]::Bold)
+            $control.ColumnHeadersDefaultCellStyle.Font=[Drawing.Font]::new('Segoe UI',9,[Drawing.FontStyle]::Bold)
             $control.DefaultCellStyle.ForeColor=$ink
             $control.DefaultCellStyle.SelectionBackColor=[Drawing.ColorTranslator]::FromHtml('#DFEBFC')
             $control.DefaultCellStyle.SelectionForeColor=[Drawing.ColorTranslator]::FromHtml('#123F78')
@@ -49,14 +49,14 @@ function Set-PrinterControlsTheme {
 function Set-PrinterAppLayout {
     $form.SuspendLayout()
     $working=[Windows.Forms.Screen]::PrimaryScreen.WorkingArea
-    $form.Size=New-Object Drawing.Size([Math]::Min(1280,$working.Width),[Math]::Min(780,$working.Height))
-    $form.MinimumSize=New-Object Drawing.Size(1180,620)
+    $form.Size=[Drawing.Size]::new([Math]::Min(1280,$working.Width),[Math]::Min(780,$working.Height))
+    $form.MinimumSize=[Drawing.Size]::new(1180,620)
     $pnlHeader.Height=80
     $pnlHeader.BackColor=[Drawing.ColorTranslator]::FromHtml('#14243B')
     $lblTitle.Text='Assistente de Impressoras'
-    $lblTitle.Font=New-Object Drawing.Font('Segoe UI',17,[Drawing.FontStyle]::Bold)
-    $lblTitle.Location=New-Object Drawing.Point(22,12)
-    $lblSubTitle.Location=New-Object Drawing.Point(24,47)
+    $lblTitle.Font=[Drawing.Font]::new('Segoe UI',17,[Drawing.FontStyle]::Bold)
+    $lblTitle.Location=[Drawing.Point]::new(22,12)
+    $lblSubTitle.Location=[Drawing.Point]::new(24,47)
     $lblSubTitle.ForeColor=[Drawing.ColorTranslator]::FromHtml('#B7C8DD')
     $chkSimulation.Text='Modo diagnóstico (sem alterações)'
     $chkSimulation.ForeColor=[Drawing.ColorTranslator]::FromHtml('#CEE2FC')
@@ -65,34 +65,34 @@ function Set-PrinterAppLayout {
     $statusStrip.BackColor=[Drawing.ColorTranslator]::FromHtml('#F3F6FB')
     Set-PrinterControlsTheme -Root $form
 
-    $body=New-Object Windows.Forms.Panel
+    $body=[Windows.Forms.Panel]::new()
     $body.Dock='Fill'
     $body.BackColor=[Drawing.ColorTranslator]::FromHtml('#F3F6FB')
     $form.Controls.Remove($tabControl)
     $form.Controls.Add($body)
     $body.BringToFront()
-    $nav=New-Object Windows.Forms.Panel
+    $nav=[Windows.Forms.Panel]::new()
     $nav.Dock='Left';$nav.Width=194;$nav.BackColor=[Drawing.Color]::White
-    $workspace=New-Object Windows.Forms.Panel
+    $workspace=[Windows.Forms.Panel]::new()
     $workspace.Dock='Fill';$workspace.Padding=New-Object Windows.Forms.Padding(14,10,14,12)
     $body.Controls.Add($workspace);$body.Controls.Add($nav)
     $workspace.BringToFront()
-    $navTitle=New-Object Windows.Forms.Label
-    $navTitle.Text='FERRAMENTAS';$navTitle.Location=New-Object Drawing.Point(18,20)
+    $navTitle=[Windows.Forms.Label]::new()
+    $navTitle.Text='FERRAMENTAS';$navTitle.Location=[Drawing.Point]::new(18,20)
     $navTitle.AutoSize=$true;$navTitle.ForeColor=[Drawing.ColorTranslator]::FromHtml('#8390A4')
-    $navTitle.Font=New-Object Drawing.Font('Segoe UI',8,[Drawing.FontStyle]::Bold)
+    $navTitle.Font=[Drawing.Font]::new('Segoe UI',8,[Drawing.FontStyle]::Bold)
     $nav.Controls.Add($navTitle)
-    $pageHeader=New-Object Windows.Forms.Panel
+    $pageHeader=[Windows.Forms.Panel]::new()
     $pageHeader.Dock='Top';$pageHeader.Height=62
-    $pageTitle=New-Object Windows.Forms.Label
-    $pageTitle.Location=New-Object Drawing.Point(0,2);$pageTitle.AutoSize=$true
-    $pageTitle.Font=New-Object Drawing.Font('Segoe UI',15,[Drawing.FontStyle]::Bold)
+    $pageTitle=[Windows.Forms.Label]::new()
+    $pageTitle.Location=[Drawing.Point]::new(0,2);$pageTitle.AutoSize=$true
+    $pageTitle.Font=[Drawing.Font]::new('Segoe UI',15,[Drawing.FontStyle]::Bold)
     $pageTitle.ForeColor=[Drawing.ColorTranslator]::FromHtml('#223047')
-    $pageHint=New-Object Windows.Forms.Label
-    $pageHint.Location=New-Object Drawing.Point(1,32);$pageHint.AutoSize=$true
+    $pageHint=[Windows.Forms.Label]::new()
+    $pageHint.Location=[Drawing.Point]::new(1,32);$pageHint.AutoSize=$true
     $pageHint.ForeColor=[Drawing.ColorTranslator]::FromHtml('#63738B')
     $pageHeader.Controls.Add($pageTitle);$pageHeader.Controls.Add($pageHint)
-    $canvas=New-Object Windows.Forms.Panel
+    $canvas=[Windows.Forms.Panel]::new()
     $canvas.Dock='Fill';$canvas.BackColor=[Drawing.Color]::White
     $workspace.Controls.Add($canvas);$workspace.Controls.Add($pageHeader);$canvas.BringToFront()
     $tabControl.Dock='None';$tabControl.TabStop=$false
@@ -114,13 +114,13 @@ function Set-PrinterAppLayout {
         if($page -eq $tab6){$title='Fila e serviços';$hint='Confira trabalhos pendentes e o serviço Spooler.'}
         if($page -eq $tab7){$title='Acesso remoto';$hint='Verifique a sessão remota e o redirecionamento de impressoras.'}
         if($page -eq $tab8){$title='Relatórios e logs';$hint='Consulte o histórico desta sessão e exporte o relatório.'}
-        $button=New-Object Windows.Forms.Button
+        $button=[Windows.Forms.Button]::new()
         $button.Text=$title;$button.TextAlign='MiddleLeft';$button.Padding=New-Object Windows.Forms.Padding(12,0,0,0)
-        $button.Size=New-Object Drawing.Size(174,42);$button.Location=New-Object Drawing.Point(10,$position)
+        $button.Size=[Drawing.Size]::new(174,42);$button.Location=[Drawing.Point]::new(10,$position)
         $button.FlatStyle='Flat';$button.FlatAppearance.BorderSize=0
         $button.Cursor=[Windows.Forms.Cursors]::Hand;$button.BackColor=[Drawing.Color]::White
         $button.ForeColor=[Drawing.ColorTranslator]::FromHtml('#506077')
-        $button.Font=New-Object Drawing.Font('Segoe UI',9)
+        $button.Font=[Drawing.Font]::new('Segoe UI',9)
         $button.AccessibleName=$title
         $target=$page
         $button.Add_Click({$tc.SelectedTab=$target}.GetNewClosure())
@@ -151,7 +151,7 @@ function Set-PrinterAppLayout {
     $widths=@(175,160,155,185,175);$x=12
     for($i=0;$i -lt $networkTools.Count;$i++) {
         $networkTools[$i].SetBounds($x,10,$widths[$i],34)
-        $networkTools[$i].Font=New-Object Drawing.Font('Segoe UI',9)
+        $networkTools[$i].Font=[Drawing.Font]::new('Segoe UI',9)
         $x+=$widths[$i]+8
     }
     $tools=$networkTools;$toolWidths=$widths;$netPanel=$pnlNetTop
@@ -161,11 +161,11 @@ function Set-PrinterAppLayout {
     }.GetNewClosure()
     $pnlNetTop.Add_Resize($layoutTools)
     $lblScanStatus.SetBounds(12,54,650,36)
-    $lblScanStatus.Font=New-Object Drawing.Font('Segoe UI',9)
+    $lblScanStatus.Font=[Drawing.Font]::new('Segoe UI',9)
     # Filter controls were previously placed between the large scan buttons.
     foreach($control in $pnlNetTop.Controls) {
         if($control -is [Windows.Forms.Label] -and $control.Text -match '^Filtro') {
-            $control.Location=New-Object Drawing.Point(700,62)
+            $control.Location=[Drawing.Point]::new(700,62)
         } elseif($control -is [Windows.Forms.TextBox]) {
             $control.SetBounds(745,57,155,25)
         }
