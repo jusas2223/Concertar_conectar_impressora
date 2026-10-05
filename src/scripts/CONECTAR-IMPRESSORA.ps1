@@ -1,9 +1,9 @@
 ﻿param(
  [string]$UNCPath='', [string]$ResultPath='',
- [ValidateSet('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient')][string]$Method='Cascade',
+ [ValidateSet('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate')][string]$Method='Cascade',
  [string]$Server='', [string]$ShareName='', [string]$DriverName='',
  [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='TestPage',
- [switch]$SkipPolicyPreparation, [string]$StateDirectory=''
+ [switch]$SkipPolicyPreparation, [string]$StateDirectory='', [string]$AccessResource=''
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'IMPRESSAO-COMUM.ps1')
@@ -24,10 +24,7 @@ function Try-NativePrinterConnection {
   if(-not $printer){throw 'A chamada terminou, mas a fila não foi confirmada em 10 segundos.'}
   return @{Success=$true;Printer=$printer}
  }catch{
-  $base=$_.Exception.GetBaseException()
-  $code=if($base -is [ComponentModel.Win32Exception]){$base.NativeErrorCode}else{([long]$base.HResult -band 65535)}
-  if($_.FullyQualifiedErrorId -match '(?i)HRESULT\s+0x([0-9a-f]{8})'){$code=([Convert]::ToInt64($matches[1],16) -band 65535)}
-  return @{Success=$false;Code=$code;NeedsAuthentication=($code -in @(5,86,1244,1326,1909,2202));Message=$_.Exception.Message;ErrorId=[string]$_.FullyQualifiedErrorId}
+  return (Get-PrinterOperationFailure -Record $_ -Stage 'Conectar fila remota' -Resource $Path -Scope Remote)
  }
 }
 function Complete-PrinterConnection {
@@ -51,7 +48,14 @@ try{
  }else{
   $address=Resolve-PrinterUNC -UNCPath $UNCPath -Server $Server -ShareName $ShareName
   $Server=$address.Server;$ShareName=$address.ShareName;$UNCPath=$address.UNCPath
-  if($Method -in @('PublishDriver','InstallDriver','PrepareHost')){
+  if($Method -eq 'Authenticate'){
+   $result=Test-PrinterNetworkSession -Server $Server
+   if($result.Success -and $AccessResource){
+    $driverRoot='\\'+$Server+'\print$'
+    if($AccessResource -ine $driverRoot -and -not $AccessResource.StartsWith($driverRoot+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Recurso de autenticação não corresponde ao print$ do servidor.'}
+    $result=Test-PrinterDriverResourceAccess -Resource $AccessResource
+   }
+  }elseif($Method -in @('PublishDriver','InstallDriver','PrepareHost')){
    $result=& (Join-Path $PSScriptRoot 'DRIVER-DO-SERVIDOR.ps1') -UNCPath $UNCPath -Action $Method -DriverName $DriverName -StateDirectory $StateDirectory -ProgressPath $(if($ResultPath){$ResultPath+'.progress'}else{''})
   }elseif($Method -in @('AddPrinter','WScript')){
    if($Method -eq 'WScript'){
@@ -77,10 +81,10 @@ try{
    else{
     $lastNativeError=$native.Code;Write-ConnectionStage ("Nível 1 recusado ($($native.Code)): $($native.Message)")
     $authenticationRequired=[bool]$native.NeedsAuthentication
-    if($native.Code -in @(5,53,64,67,86,1219,1244,1326,1909,2202)){throw "Acesso/rede recusado antes de instalar o driver: $($native.Message)"}
+    if($native.NeedsAuthentication -or $native.Code -in @(53,64,67,1219)){$result=$native;throw "Acesso/rede recusado antes de instalar o driver: $($native.Message)"}
     $currentStage='Nível 2: receber e injetar driver';Write-ConnectionStage $currentStage
     $injected=& (Join-Path $PSScriptRoot 'DRIVER-DO-SERVIDOR.ps1') -Server $Server -ShareName $ShareName -DriverName $DriverName -Action InstallDriver -ProgressPath $(if($ResultPath){$ResultPath+'.progress'}else{''})
-    if(-not $injected.Success){throw "Transferência de driver falhou: $($injected.Message)"}
+    if(-not $injected.Success){$result=$injected;if(-not $result.Stage){$result.Stage=$currentStage};throw "Transferência de driver falhou: $($injected.Message)"}
     $DriverName=[string]$injected.DriverName
     if(-not $DriverName -or -not(Get-PrinterDriver -Name $DriverName -ErrorAction Stop)){throw 'Driver recebido não foi confirmado por nome no cliente.'}
     Write-ConnectionStage $injected.Message
@@ -91,13 +95,12 @@ try{
     else{
      $lastNativeError=$retry.Code;Write-ConnectionStage ("Nível 2 recusado ($($retry.Code)): $($retry.Message)")
      $authenticationRequired=[bool]$retry.NeedsAuthentication
-     if($authenticationRequired){throw "Acesso recusado após instalar o driver: $($retry.Message)"}
+     if($authenticationRequired){$result=$retry;throw "Acesso recusado após instalar o driver: $($retry.Message)"}
      $currentStage='Nível 3: criar fila local em porta UNC';Write-ConnectionStage $currentStage
      $queueName=$ShareName+' em '+$Server
      $local=& (Join-Path $PSScriptRoot 'INSTALAR-PORTA-LOCAL.ps1') -Server $Server -ShareName $ShareName -DriverName $DriverName -QueueName $queueName
      if(-not $local.Success){
       $result=$local;$result.DriverName=$DriverName
-      $result.NeedsAuthentication=($local.NativeCode -in @(5,86,1244,1326,1909,2202))
       Write-ConnectionStage ('Nível 3 recusado: '+$local.Stage+'; '+$local.Message)
      }else{
       $printer=Wait-ExactPrinter -UNCPath $UNCPath -QueueName $queueName -DriverName $DriverName -Seconds 10
@@ -109,9 +112,11 @@ try{
   }
  }
 }catch{
- $base=$_.Exception.GetBaseException()
- $result=@{Success=$false;QueueInstalled=$false;Stage=$currentStage;Message=$_.Exception.Message;DriverName=$DriverName;
- HResult=$base.HResult;NeedsAuthentication=$authenticationRequired;Code=$(if($lastNativeError){$lastNativeError}else{([long]$base.HResult -band 65535)})}
+ if(-not $result.Stage){
+  $result=Get-PrinterOperationFailure -Record $_ -Stage $currentStage -Resource $UNCPath -Scope Local
+ }
+ $result.QueueInstalled=$false
+ $result.DriverName=$DriverName
 }
 if($injected -and $injected.RebootRequired){$result.RebootRequired=$true}
 $result.History=@($history.ToArray());$result.Cascaded=($Method -eq 'Cascade')

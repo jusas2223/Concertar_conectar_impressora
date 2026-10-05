@@ -3,7 +3,7 @@ $root=Split-Path -Parent $PSScriptRoot
 $t=$null;$e=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'src\AssistenteImpressoras.ps1'),[ref]$t,[ref]$e)
 if($e.Count){throw $e[0].Message}
-foreach($name in @('Connect-PrinterUsingAvailableSession','Use-PrinterCredentialForEndpoint')){
+foreach($name in @('Connect-PrinterUsingAvailableSession','Invoke-PrinterOperationUsingAvailableSession','Use-PrinterCredentialForEndpoint')){
  $fn=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)|Select-Object -First 1
  . ([scriptblock]::Create($fn.Extent.Text))
 }
@@ -18,14 +18,15 @@ function Connect-UNCPrinterSafe {
  }
  return $script:first
 }
-function Connect-PrinterServerAuthenticated {
- param($Server,$User,$Password)
+function Invoke-BoundedPrinterAttempt {
+ param($UNCPath,$Method,$TimeoutSeconds,$NetworkCredential,$CredentialServer)
  $script:authCalls++
- if($Server -ne 'SERVIDOR' -or $User -ne 'SERVIDOR\conta' -or $Password -ne 'Fixture-password'){throw 'Credencial alterada'}
+ if($Method -ne 'Authenticate' -or $CredentialServer -ne 'SERVIDOR' -or
+    $NetworkCredential.UserName -ne 'SERVIDOR\conta' -or $NetworkCredential.GetNetworkCredential().Password -ne 'Fixture-password'){throw 'Credencial alterada'}
  if($script:authDenied){return @{Success=$false;Code=1326;Message='Recusada'}}
  return @{Success=$true}
 }
-$cases=@('session-success','709','driver','port87','offline','conflict','cancel-worker','timeout','job-error','access','logon','existing','decline','cancel-dialog','auth-denied','retry-denied','second-server')
+$cases=@('session-success','709','driver','port87','offline','conflict','cancel-worker','timeout','job-error','access','logon','existing','decline','cancel-dialog','auth-denied','retry-denied','second-server','local-denied','driver-denied','local-logon-code')
 foreach($case in $cases){
  $script:calls=0;$script:prompts=0;$script:authCalls=0;$script:authDenied=$false
  $script:authenticatedPrinterServer='';$script:authenticatedPrinterCredential=$null
@@ -43,6 +44,9 @@ foreach($case in $cases){
   timeout {$script:first=@{Success=$false;Code=1460}}
   job-error {$script:first=@{Success=$false;Code=5;NeedsAuthentication=$true;QueueInstalled=$true}}
   logon {$script:first=@{Success=$false;Code=1326}}
+  local-denied {$script:first=@{Success=$false;Code=5;FailureScope='Local';NeedsAuthentication=$false}}
+  local-logon-code {$script:first=@{Success=$false;Code=1326;FailureScope='Local';NeedsAuthentication=$false}}
+  driver-denied {$script:first=@{Success=$false;Code=5;Stage='Ler manifesto remoto';Resource='\\SERVIDOR\print$';FailureScope='Remote';NeedsAuthentication=$true}}
   existing {
    $script:authenticatedPrinterServer='SERVIDOR'
    $script:authenticatedPrinterCredential=New-Object Management.Automation.PSCredential('SERVIDOR\conta',(ConvertTo-SecureString 'Fixture-only' -AsPlainText -Force))
@@ -61,8 +65,8 @@ foreach($case in $cases){
   $script:prompts++;return $script:choice
  }
  $result=Connect-PrinterUsingAvailableSession -UNCPath '\\SERVIDOR\Fila' -AlternateHost '192.0.2.10' -RequestCredential $prompt
- $expectedPrompt=$case -in @('access','logon','decline','cancel-dialog','auth-denied','retry-denied','second-server')
- $expectedRetry=$case -in @('access','logon','retry-denied','second-server')
+ $expectedPrompt=$case -in @('access','logon','existing','decline','cancel-dialog','auth-denied','retry-denied','second-server','driver-denied')
+ $expectedRetry=$case -in @('access','logon','existing','retry-denied','second-server','driver-denied')
  if($script:prompts -ne [int]$expectedPrompt -or $script:calls -ne (1+[int]$expectedRetry)){throw "Prompt/repetição indevida em $case"}
  if($expectedRetry -and $script:authCalls -ne 1){throw 'Autenticação não executada'}
  if($case -in @('access','logon','second-server') -and -not $result.Success){throw 'Nova conta não conectou'}
@@ -70,4 +74,4 @@ foreach($case in $cases){
  if($case -in @('auth-denied','retry-denied') -and ($result.Success -or $result.Code -ne 1326)){throw 'Erro de conta perdido'}
  if($expectedPrompt -and $case -notin @('decline','cancel-dialog') -and $script:choice.Password){throw 'Senha em texto mantida no retorno'}
 }
-'OK: 17 cenários; sessão atual primeiro, conta sob demanda e no máximo uma repetição.'
+'OK: 20 cenários; sessão atual primeiro, substituição de conta recusada, erro remoto/local e uma repetição.'

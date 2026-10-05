@@ -1,4 +1,4 @@
-﻿# Conexão em cascata — versão 1.10.3
+﻿# Conexão em cascata — versão 1.10.4
 
 ## Pelo executável
 
@@ -85,3 +85,5 @@ ResultPath produz CLIXML e arquivo .progress. Sem ResultPath, retorna um objeto 
 - https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/pnputil-command-syntax
 - https://learn.microsoft.com/en-us/windows/win32/printdocs/driver-info-8
 - https://learn.microsoft.com/en-us/troubleshoot/windows-client/printing/windows-11-rpc-connection-updates-for-print
+
+Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.4.

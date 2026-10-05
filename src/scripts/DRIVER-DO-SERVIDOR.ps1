@@ -14,8 +14,25 @@ $ErrorActionPreference = 'Stop'
 $stage = $null
 $archive = $null
 $policy = $null
-function Set-DriverStage([string]$message) {
+$script:driverOperationStage='Preparar transferência'
+$script:driverOperationScope='Local'
+$script:driverOperationResource=''
+function Set-DriverStage([string]$message,[string]$Scope='Local',[string]$Resource='') {
+    $script:driverOperationStage=$message
+    $script:driverOperationScope=$Scope
+    $script:driverOperationResource=$Resource
     if ($ProgressPath) { [IO.File]::WriteAllText($ProgressPath,$message,[Text.Encoding]::UTF8) }
+}
+function Copy-DriverSourceFile {
+    param([string]$Source,[string]$Destination)
+    $inputStream=$null;$outputStream=$null
+    try{
+        Set-DriverStage 'Ler arquivo do driver' -Scope $(if($Source.StartsWith('\\')){'Remote'}else{'Local'}) -Resource $Source
+        $inputStream=[IO.File]::OpenRead($Source)
+        Set-DriverStage 'Gravar arquivo do driver no cliente' -Resource $Destination
+        $outputStream=[IO.File]::Open($Destination,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $inputStream.CopyTo($outputStream)
+    }finally{if($outputStream){$outputStream.Dispose()};if($inputStream){$inputStream.Dispose()}}
 }
 $native = @'
 using System;
@@ -92,11 +109,13 @@ function Get-SafeFileName([string]$name) {
 
 function Copy-ExactDriverDirectory {
     param([string]$Source,[string]$Destination)
+    Set-DriverStage 'Enumerar arquivos do pacote' -Scope $(if($Source.StartsWith('\\')){'Remote'}else{'Local'}) -Resource $Source
     $root=[IO.Path]::GetFullPath($Source).TrimEnd('\')+'\'
     $files=@(Get-ChildItem -LiteralPath $Source -Recurse -File -ErrorAction Stop)
     if(Get-ChildItem -LiteralPath $Source -Recurse -Directory -ErrorAction Stop | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }){throw 'Pacote contém um diretório redirecionado.'}
     if($files.Count -gt 4096){throw 'Pacote de driver excede 4096 arquivos.'}
     [long]$total=0
+    Set-DriverStage 'Criar pasta temporária do pacote' -Resource $Destination
     [void][IO.Directory]::CreateDirectory($Destination)
     foreach($file in $files){
         $full=[IO.Path]::GetFullPath($file.FullName)
@@ -105,8 +124,9 @@ function Copy-ExactDriverDirectory {
         if($total -gt 536870912){throw 'Pacote de driver excede 512 MB.'}
         $relative=$full.Substring($root.Length)
         $target=Join-Path $Destination $relative
+        Set-DriverStage 'Criar pasta temporária do pacote' -Resource $target
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
-        Copy-Item -LiteralPath $full -Destination $target -Force -ErrorAction Stop
+        Copy-DriverSourceFile -Source $full -Destination $target
     }
 }
 
@@ -115,22 +135,27 @@ function Find-RemoteInfPackage {
     $root='\\'+$Server+'\print$\'+$Architecture
     $prepared=Join-Path $root ('AssistentePacotes\'+(Get-PackageKey $Share $Architecture).Replace('.zip',''))
     $metadataPath=Join-Path $prepared 'package.json'
-    if(Test-Path -LiteralPath $metadataPath -PathType Leaf){
+    Set-DriverStage 'Ler manifesto remoto do driver' -Scope Remote -Resource $metadataPath
+    if(Test-PrinterRemotePath -Path $metadataPath){
         $metadata=Get-Content -LiteralPath $metadataPath -Raw -ErrorAction Stop | ConvertFrom-Json
         if($metadata.Format -ne 2 -or $metadata.Share -ine $Share -or $metadata.Environment -ine $Environment -or
             -not $metadata.DriverName -or ($RequestedDriver -and $metadata.DriverName -ine $RequestedDriver)){throw 'Pacote INF preparado não corresponde à fila/arquitetura.'}
         $infName=Get-SafeFileName ([string]$metadata.InfName)
         $folder=if($metadata.FilesDirectory){Get-SafeFileName ([string]$metadata.FilesDirectory)}else{'Files'}
         $source=Join-Path $prepared $folder
-        if(-not(Test-Path -LiteralPath (Join-Path $source $infName))){throw 'INF preparado ausente.'}
+        Set-DriverStage 'Ler INF remoto' -Scope Remote -Resource (Join-Path $source $infName)
+        if(-not(Test-PrinterRemotePath -Path (Join-Path $source $infName))){throw 'INF preparado ausente.'}
         return @{Source=$source;InfName=$infName;DriverName=[string]$metadata.DriverName;Hashes=$metadata.Files}
     }
-    if(-not(Test-Path -LiteralPath $root -PathType Container)){throw "Compartilhamento de drivers inacessível: $root"}
+    Set-DriverStage 'Ler compartilhamento de drivers' -Scope Remote -Resource $root
+    if(-not(Test-PrinterRemotePath -Path $root -Directory)){throw "Compartilhamento de drivers inexistente: $root"}
     $queue='\\'+$Server+'\'+$Share
+    Set-DriverStage 'Consultar driver da fila remota' -Scope Remote -Resource $queue
     $actual=[PrinterDriverTransfer]::QueueDriver($queue)
     if($RequestedDriver -and $RequestedDriver -ine $actual){throw 'O driver solicitado não corresponde à fila remota.'}
     $infPath=''
     try{$infPath=[PrinterDriverTransfer]::DriverInf($queue,$Environment)}catch{}
+    Set-DriverStage 'Localizar INF no compartilhamento' -Scope Remote -Resource $root
     $infs=@(Get-ChildItem -LiteralPath $root -Filter '*.inf' -Recurse -File -ErrorAction Stop)
     if(-not $infs.Count){return $null}
     $selected=@()
@@ -252,7 +277,7 @@ try {
         $remote=Find-RemoteInfPackage -Server $server -Share $share -Architecture $arch -Environment $environment -RequestedDriver $DriverName
         if($remote){
             $infStage=Join-Path $stage 'DriverRemoto'
-            Set-DriverStage 'Copiar o pacote INF completo pela rede'
+            Set-DriverStage 'Copiar o pacote INF completo pela rede' -Scope Remote -Resource $remote.Source
             Copy-ExactDriverDirectory -Source $remote.Source -Destination $infStage
             foreach($file in @($remote.Hashes)){
                 if(-not $file){continue}
@@ -264,7 +289,11 @@ try {
             # Select only the mapped INF, not other drivers that share a spool folder.
             return (Invoke-PrinterPnPInstall -Directory $infStage -DriverName $remote.DriverName -InfName $remote.InfName)
         }
-    } catch {$infFailure=$_.Exception.Message}
+    } catch {
+        $infError=Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $script:driverOperationResource -Scope $script:driverOperationScope
+        if($infError.NeedsAuthentication -or $script:driverOperationScope -eq 'Local'){return $infError}
+        $infFailure=$_.Exception.Message
+    }
 
     # Legacy non-package-aware drivers can have no INF at all. Keep the
     # generic prepared Type 3 bundle instead of inventing an INF from DLLs.
@@ -272,11 +301,13 @@ try {
     # SMB only, so it does not depend on the failing Point and Print RPC download.
     Set-DriverStage 'Localizar pacote do compartilhamento no servidor'
     $packagePath = '\\' + $server + '\print$\AssistentePacotes\' + $key
-    if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) { throw "Não há pacote completo disponível para esta fila. INF remoto: $infFailure. No servidor $server, prepare o driver pelo EXE para publicar o pacote legado quando aplicável." }
+    Set-DriverStage 'Ler pacote legado remoto' -Scope Remote -Resource $packagePath
+    if (-not (Test-PrinterRemotePath -Path $packagePath)) { throw "Não há pacote completo disponível para esta fila. INF remoto: $infFailure. No servidor $server, prepare o driver pelo EXE para publicar o pacote legado quando aplicável." }
     if ((Get-Item -LiteralPath $packagePath).Length -gt 67108864) { throw 'Pacote maior que 64 MB.' }
     $localZip = Join-Path $stage 'package.zip'
     Set-DriverStage 'Copiar pacote pela rede'
-    Copy-Item -LiteralPath $packagePath -Destination $localZip
+    Copy-DriverSourceFile -Source $packagePath -Destination $localZip
+    Set-DriverStage 'Conferir pacote recebido no cliente' -Resource $localZip
     $archive = [IO.Compression.ZipFile]::OpenRead($localZip)
     $entries = @($archive.Entries)
     if ($entries.Count -gt 130 -or $entries.Count -lt 2) { throw 'Quantidade inválida de arquivos no pacote.' }
@@ -350,7 +381,7 @@ try {
     if (-not $confirmed) { throw 'O Windows não confirmou a instalação do driver.' }
     return @{ Success=$true; DriverName=$driverName; Message="Driver '$driverName' recebido de $server e instalado neste PC." }
 } catch {
-    return @{ Success=$false; Message=$_.Exception.Message; HResult=$_.Exception.HResult }
+    return (Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $script:driverOperationResource -Scope $script:driverOperationScope)
 } finally {
     if ($archive) { $archive.Dispose() }
     if ($stage -and $stage.StartsWith((Join-Path $env:TEMP 'PrinterDriverTransfer_'),[StringComparison]::OrdinalIgnoreCase)) {

@@ -9,6 +9,7 @@ try{
     $mocks=@'
 function Set-PrinterCompatibilityPolicies {param($Role,$StateDirectory) $global:policyCalls++;return @{Success=$true;Message='Fixture';StatePath='Fixture-state'}}
 function Assert-PrinterAdmin {}
+function Test-PrinterRemoteQueueAccess {param($UNCPath) if($global:scenario -eq 'port-denied'){return 5};return 0}
 function Submit-PrinterValidationPage {param($QueueName) $global:jobCalls++; return 42}
 function Get-PrintJob {param($PrinterName,$ErrorAction)
  if($global:scenario -eq 'job-error'){return [pscustomobject]@{ID=42;JobStatus='Error'}}
@@ -41,7 +42,8 @@ function Add-Printer {param($ConnectionName,$Name,$DriverName,$PortName,$ErrorAc
 param($Server,$ShareName,$DriverName,$Action,$ProgressPath)
 $global:driverCalls++
 if($Server -ne 'SERVIDOR' -or $ShareName -ne 'Fila'){throw 'Parâmetros não preservados.'}
-if($global:scenario -eq 'missing'){return @{Success=$false;Message='Pacote INF não disponível'}}
+if($global:scenario -eq 'missing'){return @{Success=$false;Code=2;Stage='Ler pacote remoto';Message='Pacote INF não disponível'}}
+if($global:scenario -eq 'driver-denied'){return @{Success=$false;Code=5;NativeCode=5;NeedsAuthentication=$true;FailureScope='Remote';Stage='Ler manifesto remoto';Resource='\\SERVIDOR\print$';Message='Acesso negado ao pacote'}}
 $global:driverReady=$true
 return @{Success=$true;DriverName='Fabricante modelo';Message='Fixture instalado'}
 '@,$utf8)
@@ -56,6 +58,7 @@ switch($Scenario){
  inject {if(-not $result.Success -or $result.Level -ne 'InjectedDriver' -or $global:nativeCalls -ne 2 -or $global:driverCalls -ne 1){throw 'Nível 2 falhou'}}
  local {if(-not $result.Success -or $result.Level -ne 'LocalPort' -or $result.PortUNC -ne '\\SERVIDOR\Fila' -or $global:nativeCalls -ne 2 -or $global:driverCalls -ne 1){throw 'Nível 3 falhou'}}
  missing {if($result.Success -or $global:nativeCalls -ne 1 -or $global:driverCalls -ne 1 -or $global:port){throw 'Driver ausente foi aceito/repetido'}}
+ driver-denied {if($result.Success -or $result.Code -ne 5 -or -not $result.NeedsAuthentication -or $result.Stage -ne 'Ler manifesto remoto' -or $result.Resource -ne '\\SERVIDOR\print$' -or $global:nativeCalls -ne 1 -or $global:port){throw '709 ocultou recusa de acesso do driver'}}
  access {if($result.Success -or -not $result.NeedsAuthentication -or $result.Code -ne 5 -or $global:nativeCalls -ne 1 -or $global:driverCalls){throw 'Acesso negado iniciou instalação ou perdeu a indicação de conta'}}
  port-denied {if($result.Success -or -not $result.NeedsAuthentication -or $result.Stage -ne 'Criar porta local UNC' -or $global:jobCalls){throw 'Porta negada foi aceita ou perdeu a indicação de conta'}}
  job-error {if($result.Success -or -not $result.QueueInstalled -or $global:nativeCalls -ne 1 -or $global:driverCalls -or $global:jobCalls -ne 1){throw 'Job em erro foi aceito/reenviado'}}
@@ -63,11 +66,11 @@ switch($Scenario){
 }
 if($result.Success -and (-not $result.QueueInstalled -or -not $result.JobValidated -or $result.PhysicalPrintConfirmed)){throw 'Validação falsa'}
 '@,$utf8)
-    foreach($case in @('native','inject','local','missing','access','port-denied','job-error','unrelated-job')){
+    foreach($case in @('native','inject','local','missing','access','driver-denied','port-denied','job-error','unrelated-job')){
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $temp 'wrapper.ps1') -Scenario $case
         if($LASTEXITCODE){throw "Cascata falhou em $case"}
     }
 }finally{
     if([IO.Path]::GetFullPath($temp).StartsWith([IO.Path]::GetFullPath($env:TEMP)+'\',[StringComparison]::OrdinalIgnoreCase)){Remove-Item -LiteralPath $temp -Recurse -Force}
 }
-'OK: oito cenários da cascata, driver ausente, autenticação, porta negada e JobId sem falso positivo.'
+'OK: nove cenários da cascata; recusa no driver preservada após 709, autenticação, porta e JobId.'

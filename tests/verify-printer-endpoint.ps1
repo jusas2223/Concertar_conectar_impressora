@@ -3,7 +3,7 @@ $root=Split-Path -Parent $PSScriptRoot
 $t=$null;$e=$null;$path=Join-Path $root 'src\AssistenteImpressoras.ps1'
 $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$t,[ref]$e)
 if($e.Count){throw $e[0].Message}
-foreach($name in @('Resolve-PrinterConnectionEndpoint','Use-PrinterCredentialForEndpoint','Connect-PrinterUsingAvailableSession')){
+foreach($name in @('Resolve-PrinterConnectionEndpoint','Use-PrinterCredentialForEndpoint','Connect-PrinterUsingAvailableSession','Invoke-PrinterOperationUsingAvailableSession')){
  $fn=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)|Select-Object -First 1
  . ([scriptblock]::Create($fn.Extent.Text))
 }

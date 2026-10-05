@@ -1,4 +1,78 @@
 ﻿# Shared by the bounded workers. No UI and no credentials on disk.
+function Get-PrinterOperationFailure {
+    param([Management.Automation.ErrorRecord]$Record,[string]$Stage,[string]$Resource='',
+        [ValidateSet('Remote','Local')][string]$Scope='Local')
+    $exception=$Record.Exception.GetBaseException()
+    $code=0
+    if($exception -is [ComponentModel.Win32Exception]){$code=$exception.NativeErrorCode}
+    elseif($Record.FullyQualifiedErrorId -match '(?i)HRESULT\s+0x([0-9a-f]{8})'){$code=([Convert]::ToInt64($matches[1],16) -band 65535)}
+    elseif($exception -is [UnauthorizedAccessException]){$code=5}
+    elseif(([long]$exception.HResult -band 4294901760) -eq 2147942400){$code=([long]$exception.HResult -band 65535)}
+    return @{Success=$false;Code=$(if($code){$code}else{31});NativeCode=$code;
+        Stage=$Stage;Resource=$Resource;FailureScope=$Scope;ErrorId=[string]$Record.FullyQualifiedErrorId;
+        HResult=('0x{0:X8}' -f ([long]$exception.HResult -band 4294967295));Message=$Record.Exception.Message;
+        NeedsAuthentication=($Scope -eq 'Remote' -and $code -in @(5,86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202))}
+}
+function Test-PrinterRemotePath {
+    param([string]$Path,[switch]$Directory)
+    # Exists/Test-Path can hide access errors as an absent package. Preserve them.
+    try{$attributes=[IO.File]::GetAttributes($Path)}catch{
+        $failure=Get-PrinterOperationFailure -Record $_ -Stage 'Ler caminho remoto' -Resource $Path -Scope Remote
+        if($failure.NativeCode -in @(2,3)){return $false}
+        throw
+    }
+    return (($attributes -band [IO.FileAttributes]::Directory) -ne 0) -eq [bool]$Directory
+}
+function Initialize-PrinterRemoteAccessApi {
+    if('PrinterRemoteAccess' -as [type]){return}
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PrinterRemoteAccess {
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct RESOURCE {
+  public int Scope,Type,DisplayType,Usage;
+  public string LocalName,RemoteName,Comment,Provider;
+ }
+ [DllImport("mpr.dll",CharSet=CharSet.Unicode)] static extern int WNetAddConnection2W(ref RESOURCE resource,string password,string user,int flags);
+ [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool OpenPrinterW(string name,out IntPtr handle,IntPtr defaults);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool ClosePrinter(IntPtr handle);
+ public static int Connect(string server){var resource=new RESOURCE();resource.RemoteName="\\\\"+server+"\\IPC$";return WNetAddConnection2W(ref resource,null,null,0);}
+ public static int Queue(string path){IntPtr handle; if(!OpenPrinterW(path,out handle,IntPtr.Zero))return Marshal.GetLastWin32Error();try{return 0;}finally{ClosePrinter(handle);}}
+}
+'@ -ErrorAction Stop
+}
+function Test-PrinterRemoteQueueAccess {
+    param([string]$UNCPath)
+    Initialize-PrinterRemoteAccessApi
+    return [PrinterRemoteAccess]::Queue($UNCPath)
+}
+function Test-PrinterNetworkSession {
+    param([string]$Server)
+    Initialize-PrinterRemoteAccessApi
+    $code=[PrinterRemoteAccess]::Connect($Server)
+    return @{Success=($code -eq 0);Code=$code;NativeCode=$code;Stage='Autenticar sessão de rede';
+        Resource=('\\'+$Server+'\IPC$');FailureScope='Remote';
+        NeedsAuthentication=($code -in @(5,86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202));
+        Message=$(if($code -eq 0){'Sessão de rede estabelecida; o acesso à fila e ao pacote ainda será validado.'}else{'O servidor recusou a sessão de rede: '+([ComponentModel.Win32Exception]::new($code).Message)+' (código '+$code+').'})}
+}
+function Test-PrinterDriverResourceAccess {
+    param([string]$Resource)
+    $stream=$null
+    try{
+        $attributes=[IO.File]::GetAttributes($Resource)
+        if($attributes -band [IO.FileAttributes]::Directory){
+            # Enumerate at least once: metadata lookup alone is not read permission.
+            $iterator=[IO.Directory]::EnumerateFileSystemEntries($Resource).GetEnumerator()
+            try{[void]$iterator.MoveNext()}finally{if($iterator -is [IDisposable]){$iterator.Dispose()}}
+        }else{$stream=[IO.File]::OpenRead($Resource);[void]$stream.ReadByte()}
+        return @{Success=$true;Code=0;Resource=$Resource;Stage='Conferir leitura do driver remoto';Message='Leitura do recurso remoto confirmada; a instalação ainda será validada.'}
+    }catch{
+        $failure=Get-PrinterOperationFailure -Record $_ -Stage 'Conferir leitura do driver remoto' -Resource $Resource -Scope Remote
+        # A missing file is not an authentication refusal. Let the operation report it.
+        if($failure.NativeCode -in @(2,3)){return @{Success=$true;Code=0;Message='Sessão estabelecida; o pacote solicitado não foi encontrado e será verificado na operação.'}}
+        return $failure
+    }finally{if($stream){$stream.Dispose()}}
+}
 function Resolve-PrinterUNC {
     param([string]$UNCPath,[string]$Server,[string]$ShareName)
     if ($UNCPath) {

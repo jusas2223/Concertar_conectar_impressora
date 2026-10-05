@@ -2,7 +2,7 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.3**.
+Versão atual: **1.10.4**.
 
 A conexão executa uma cascata: conexão nativa, recebimento automático de pacote INF/driver pela rede e alternativa por porta local UNC. Confirma a fila no Windows e acompanha uma página de validação pelo JobId. Falha ou job pendente não gera repetição infinita nem sucesso falso.
 
@@ -48,3 +48,5 @@ Os testes cobrem sintaxe, conteúdo incorporado ao EXE, descoberta, autenticaç�
 - `tests/`: verificações automatizadas.
 
 Esta edição não inclui dados de atendimento, logs, drivers de fabricantes nem arquivos da máquina virtual de testes.
+
+Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.4.

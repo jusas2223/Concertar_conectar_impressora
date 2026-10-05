@@ -180,47 +180,48 @@ public static class PrinterNetworkAuth {
 }
 
 function Request-PrinterServerCredential {
-    param([string]$Server, [string]$InitialUser = '', [System.Windows.Forms.IWin32Window]$Parent)
+    param([string]$Server, [string]$InitialUser = '', [System.Windows.Forms.IWin32Window]$Parent,
+        [string]$Reason='')
 
     $dialog = [System.Windows.Forms.Form]::new()
     $dialog.Text = "Conta para impressora em $Server"
-    $dialog.Size = [System.Drawing.Size]::new(455, 235)
+    $dialog.Size = [System.Drawing.Size]::new(455, 285)
     $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
 
     $instruction = [System.Windows.Forms.Label]::new()
-    $instruction.Text = 'O Windows recusou o acesso com a sessão atual. Use uma conta com permissão no servidor e a senha da conta, não o PIN.'
+    $instruction.Text = $(if($Reason){$Reason}else{'O Windows recusou o acesso com a sessão atual.'}) + "`nUse uma conta com permissão no servidor e a senha da conta, não o PIN."
     $instruction.Location = [System.Drawing.Point]::new(15, 12)
-    $instruction.Size = [System.Drawing.Size]::new(410, 35)
+    $instruction.Size = [System.Drawing.Size]::new(410, 85)
     $dialog.Controls.Add($instruction)
 
     $userLabel = [System.Windows.Forms.Label]::new()
     $userLabel.Text = 'Usuário:'
-    $userLabel.Location = [System.Drawing.Point]::new(15, 57)
+    $userLabel.Location = [System.Drawing.Point]::new(15, 107)
     $userLabel.AutoSize = $true
     $dialog.Controls.Add($userLabel)
     $userBox = [System.Windows.Forms.TextBox]::new()
-    $userBox.Location = [System.Drawing.Point]::new(95, 53)
+    $userBox.Location = [System.Drawing.Point]::new(95, 103)
     $userBox.Size = [System.Drawing.Size]::new(328, 23)
     $userBox.Text = if ($InitialUser) { $InitialUser } else { "$Server\" }
     $dialog.Controls.Add($userBox)
 
     $passLabel = [System.Windows.Forms.Label]::new()
     $passLabel.Text = 'Senha:'
-    $passLabel.Location = [System.Drawing.Point]::new(15, 92)
+    $passLabel.Location = [System.Drawing.Point]::new(15, 142)
     $passLabel.AutoSize = $true
     $dialog.Controls.Add($passLabel)
     $passBox = [System.Windows.Forms.TextBox]::new()
-    $passBox.Location = [System.Drawing.Point]::new(95, 88)
+    $passBox.Location = [System.Drawing.Point]::new(95, 138)
     $passBox.Size = [System.Drawing.Size]::new(328, 23)
     $passBox.UseSystemPasswordChar = $true
     $dialog.Controls.Add($passBox)
 
     $connectButton = [System.Windows.Forms.Button]::new()
     $connectButton.Text = 'Conectar'
-    $connectButton.Location = [System.Drawing.Point]::new(15, 137)
+    $connectButton.Location = [System.Drawing.Point]::new(15, 187)
     $connectButton.Size = [System.Drawing.Size]::new(110, 32)
     $connectButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $dialog.Controls.Add($connectButton)
@@ -228,14 +229,14 @@ function Request-PrinterServerCredential {
 
     $withoutButton = [System.Windows.Forms.Button]::new()
     $withoutButton.Text = 'Manter sessão atual'
-    $withoutButton.Location = [System.Drawing.Point]::new(137, 137)
+    $withoutButton.Location = [System.Drawing.Point]::new(137, 187)
     $withoutButton.Size = [System.Drawing.Size]::new(135, 32)
     $withoutButton.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
     $dialog.Controls.Add($withoutButton)
 
     $cancelButton = [System.Windows.Forms.Button]::new()
     $cancelButton.Text = 'Cancelar'
-    $cancelButton.Location = [System.Drawing.Point]::new(284, 137)
+    $cancelButton.Location = [System.Drawing.Point]::new(284, 187)
     $cancelButton.Size = [System.Drawing.Size]::new(135, 32)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancelButton)
@@ -815,7 +816,8 @@ function Invoke-LocalPortInstallElevated {
         }
         $detail = "Etapa: $($result.Stage)`nErro: $($result.Message)`nCódigo: $($result.HResult)`nIdentificador: $($result.ErrorId)`nMétodo da porta: $($result.PortMethod)`nCódigo nativo: $($result.NativeCode)`nErro CIM anterior: $($result.CimPortError)"
         Write-AppLog -Message ("Instalação por porta local falhou: " + ($detail -replace "`r?`n", ' | ')) -Level 'AVISO'
-        return @{ Success=$false; Message=$detail; Stage=[string]$result.Stage; HResult=[string]$result.HResult }
+        $result.Message=$detail
+        return $result
     } catch {
         Write-AppLog -Message "Não foi possível iniciar o instalador de porta local: $($_.Exception.Message)" -Level 'ERRO'
         return @{ Success=$false; Message=$_.Exception.Message }
@@ -1008,7 +1010,13 @@ function Show-LocalPortFallbackDialog {
             if ($script:authenticatedPrinterServer -ieq $driverServer) { $credential = $script:authenticatedPrinterCredential }
             $script:cancelPrinterConnection = $false
             $status.Text = 'Recebendo o driver preparado no servidor...'
-            $received = Invoke-BoundedPrinterAttempt -UNCPath $port -Method InstallDriver -TimeoutSeconds 40 -NetworkCredential $credential -CredentialServer $driverServer
+            $received = Invoke-PrinterOperationUsingAvailableSession -UNCPath $port -RequestCredential {
+                param($hostName,$failure)
+                Request-PrinterServerCredential -Server $hostName -InitialUser $script:authenticatedPrinterUser -Parent $dialog -Reason (Get-PrinterCredentialReason $failure)
+            } -Attempt {
+                $credential=if($script:authenticatedPrinterServer -ieq $driverServer){$script:authenticatedPrinterCredential}else{$null}
+                Invoke-BoundedPrinterAttempt -UNCPath $port -Method InstallDriver -TimeoutSeconds 40 -NetworkCredential $credential -CredentialServer $driverServer
+            }
             Write-AppLog -Message "Receber driver: $($received.Message)" -Level $(if ($received.Success) { 'SUCESSO' } else { 'AVISO' })
             $status.Text = $received.Message
             if ($received.Success) {
@@ -1016,7 +1024,12 @@ function Show-LocalPortFallbackDialog {
                 foreach ($availableDriver in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$availableDriver) }
                 $cmbDriver.SelectedItem = $received.DriverName
                 $status.ForeColor = [System.Drawing.Color]::DarkGreen
-            } else { $status.ForeColor = [System.Drawing.Color]::DarkRed }
+            } else {
+                $status.ForeColor = [System.Drawing.Color]::DarkRed
+                $status.Text = 'Falha ao receber driver; consulte a mensagem.'
+                $detail="Etapa: $($received.Stage)`nRecurso: $($received.Resource)`nCódigo: $($received.Code)`n`n$($received.Message)"
+                [System.Windows.Forms.MessageBox]::Show($dialog,$detail,'Não foi possível receber o driver',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            }
         } catch { $status.Text = $_.Exception.Message }
         finally { $btnServerDriver.Enabled = $true }
     })
@@ -1073,7 +1086,10 @@ function Show-LocalPortFallbackDialog {
         $status.ForeColor = [System.Drawing.Color]::DarkBlue
         $status.Text = 'Aguarde a autorização do Windows e a confirmação da fila...'
         [System.Windows.Forms.Application]::DoEvents()
-        $attempt = Invoke-LocalPortInstallElevated -UNCPath $port -DriverName $driver -QueueName $queue -InfPath $inf
+        $attempt = Invoke-PrinterOperationUsingAvailableSession -UNCPath $port -RequestCredential {
+            param($hostName,$failure)
+            Request-PrinterServerCredential -Server $hostName -InitialUser $script:authenticatedPrinterUser -Parent $dialog -Reason (Get-PrinterCredentialReason $failure)
+        } -Attempt { Invoke-LocalPortInstallElevated -UNCPath $port -DriverName $driver -QueueName $queue -InfPath $inf }
         if ($attempt.Success) {
             $script:localPortDialogResult = $attempt
             $dialog.Close()
@@ -1110,11 +1126,11 @@ function Offer-Win10LocalPortFallback {
 function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
-        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort')][string]$Method,
+        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate')][string]$Method,
         [int]$TimeoutSeconds = 25,
         [pscredential]$NetworkCredential,
         [string]$CredentialServer = '',
-        [string]$LocalPortRequestPath = ''
+        [string]$LocalPortRequestPath = '', [string]$AccessResource = ''
     )
     $resultPath = ''
     $process = $null
@@ -1140,12 +1156,16 @@ function Invoke-BoundedPrinterAttempt {
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -RequestPath "{1}" -ResultPath "{2}"' -f $LocalPortInstallPath,$LocalPortRequestPath,$resultPath
             $executable = Join-Path $PSHOME 'powershell.exe'
-        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient')) {
+        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate')) {
             if (-not $PrinterConnectionPath -or -not (Test-Path -LiteralPath $PrinterConnectionPath)) {
                 return @{ Success=$false; Message='Rotina interna de conexão não encontrada no EXE.' }
             }
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -UNCPath "{1}" -ResultPath "{2}" -Method {3}' -f $PrinterConnectionPath,$UNCPath,$resultPath,$Method
+            if($Method -eq 'Authenticate' -and $AccessResource){
+                if($AccessResource -match '["\x00-\x1f]'){return @{Success=$false;Code=87;Message='Recurso remoto inválido.'}}
+                $arguments += ' -AccessResource "'+$AccessResource+'"'
+            }
             $executable = Join-Path $PSHOME 'powershell.exe'
         } else {
             $arguments = 'printui.dll,PrintUIEntry /in /q /n "' + $UNCPath + '"'
@@ -1198,7 +1218,7 @@ function Invoke-BoundedPrinterAttempt {
             Start-Sleep -Milliseconds 100
         }
         $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
-        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort')) {
+        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
@@ -1246,40 +1266,9 @@ function Connect-UNCPrinterSafe {
 function Connect-PrinterUsingAvailableSession {
     param([string]$UNCPath, [string]$AlternateHost='', [scriptblock]$RequestCredential,
         [string[]]$CredentialServerAliases=@())
-
-    # Uma tentativa com a identidade atual ou com a conta já confirmada.
-    # Nunca repetir um job/fila instalada nem interpretar 709/87 como senha ausente.
-    $server = ([regex]::Match($UNCPath, '^\\\\([^\\]+)\\')).Groups[1].Value
-    Use-PrinterCredentialForEndpoint -Server $server -Aliases $CredentialServerAliases
-    $hasCredential = $script:authenticatedPrinterServer -ieq $server -and
-        $null -ne $script:authenticatedPrinterCredential
-    $result = Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost
-    if ($result.Success -or $result.Simulated -or $result.QueueInstalled -or
-        $result.Code -in @(1223,1460) -or $hasCredential -or -not $RequestCredential) { return $result }
-    $needsAccount = $result.NeedsAuthentication -or $result.Code -in @(86,1244,1326,1909,2202)
-    if (-not $needsAccount) { return $result }
-
-    Write-AppLog -Message "A sessão atual foi recusada em $server; solicitando uma conta com permissão uma vez." -Level AVISO
-    $choice = & $RequestCredential $server
-    if (-not $choice -or $choice.Cancelled) {
-        return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada na solicitação de conta.'}
-    }
-    if ($choice.WithoutCredential) { return $result }
-    try {
-        if (-not $choice.User -or -not $choice.Password) {
-            return @{Success=$false;Code=87;Cascaded=$true;Message='Informe usuário e senha juntos para usar outra conta.'}
-        }
-        $credential = New-Object Management.Automation.PSCredential($choice.User,
-            (ConvertTo-SecureString $choice.Password -AsPlainText -Force))
-        $auth = Connect-PrinterServerAuthenticated -Server $server -User $choice.User -Password $choice.Password
-        if (-not $auth.Success) { return @{Success=$false;Code=$auth.Code;Cascaded=$true;Message=$auth.Message} }
-        $script:authenticatedPrinterServer = $server
-        $script:authenticatedPrinterUser = $choice.User
-        $script:authenticatedPrinterCredential = $credential
-        Write-AppLog -Message "Conta confirmada para $server; repetindo a conexão uma única vez." -Level INFO
-    } finally { $choice.Password = $null }
-    # A segunda tentativa mantém a credencial em memória e não abre outro diálogo.
-    return (Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost)
+    return (Invoke-PrinterOperationUsingAvailableSession -UNCPath $UNCPath -CredentialServerAliases $CredentialServerAliases -RequestCredential $RequestCredential -Attempt {
+        Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost
+    })
 }
 
 function Ensure-RemotePrinterConnectedAndDriverInstalled {
@@ -1526,7 +1515,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.3]"
+$form.Text = "Arrumar Impressora VG [v1.10.4]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1926,6 +1915,60 @@ function Resolve-PrinterConnectionEndpoint {
     }
     $aliases = @(@($originalServer,$target) + $displayParts | Select-Object -Unique)
     return @{Success=$true;Server=$target;ShareName=$share;UNCPath=('\\'+$target+'\'+$share);Mode=$Mode;Aliases=$aliases}
+}
+
+function Invoke-PrinterOperationUsingAvailableSession {
+    param([string]$UNCPath,[scriptblock]$Attempt,[scriptblock]$RequestCredential,
+        [string[]]$CredentialServerAliases=@())
+    $server = ([regex]::Match($UNCPath, '^\\\\([^\\]+)\\')).Groups[1].Value
+    Use-PrinterCredentialForEndpoint -Server $server -Aliases $CredentialServerAliases
+    $result = & $Attempt
+    if ($result.Success -or $result.Simulated -or $result.QueueInstalled -or
+        $result.Cancelled -or $result.TimedOut -or $result.Code -in @(1223,1460) -or -not $RequestCredential) { return $result }
+    $needsAccount = $result.NeedsAuthentication -or
+        ($result.FailureScope -ne 'Local' -and $result.Code -in @(86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202))
+    if (-not $needsAccount) { return $result }
+    Write-AppLog -Message "Acesso recusado em $server; etapa '$($result.Stage)', recurso '$($result.Resource)', código $($result.Code). Solicitando uma conta uma vez." -Level AVISO
+    $choice = & $RequestCredential $server $result
+    if (-not $choice -or $choice.Cancelled) {
+        return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada na solicitação de conta.'}
+    }
+    if ($choice.WithoutCredential) { $result.CredentialPrompted=$true;return $result }
+    try {
+        if (-not $choice.User -or -not $choice.Password) {
+            return @{Success=$false;Code=87;Cascaded=$true;Message='Informe usuário e senha juntos para usar outra conta.'}
+        }
+        $credential = New-Object Management.Automation.PSCredential($choice.User,
+            (ConvertTo-SecureString $choice.Password -AsPlainText -Force))
+        # Isolated network token: replacement credentials do not conflict with
+        # SMB connections belonging to Explorer or other applications.
+        $driverRoot='\\'+$server+'\print$'
+        $accessResource=if($result.Resource -ieq $driverRoot -or ([string]$result.Resource).StartsWith($driverRoot+'\',[StringComparison]::OrdinalIgnoreCase)){[string]$result.Resource}else{''}
+        $auth = Invoke-BoundedPrinterAttempt -UNCPath $UNCPath -Method Authenticate -TimeoutSeconds 15 -NetworkCredential $credential -CredentialServer $server -AccessResource $accessResource
+        if (-not $auth.Success) {
+            $auth.Cascaded=$true;$auth.CredentialPrompted=$true
+            if($auth.Cancelled){$auth.Code=1223}
+            elseif($auth.TimedOut){$auth.Code=1460}
+            else{$auth.Message="A tentativa com a conta informada falhou.`nEtapa: $($auth.Stage)`nRecurso: $($auth.Resource)`nCódigo: $($auth.Code)`n`n$($auth.Message)"}
+            return $auth
+        }
+        $script:authenticatedPrinterServer = $server
+        $script:authenticatedPrinterUser = $choice.User
+        $script:authenticatedPrinterCredential = $credential
+        Write-AppLog -Message "Sessão de rede estabelecida em $server; repetindo a operação uma única vez para validar o acesso ao recurso." -Level INFO
+    } finally { $choice.Password = $null }
+    # A segunda tentativa mantém a credencial em memória e não abre outro diálogo.
+    $retried=& $Attempt
+    $retried.CredentialPrompted=$true
+    return $retried
+}
+
+function Get-PrinterCredentialReason {
+    param($Failure)
+    $resource=([string]$Failure.Resource -replace '[\r\n]',' ')
+    if($resource.Length -gt 150){$resource=$resource.Substring(0,147)+'...'}
+    $stage=if($Failure.Stage){[string]$Failure.Stage}else{'acessar impressora no servidor'}
+    return "Acesso recusado: $stage."+$(if($resource){"`nRecurso: $resource"}else{''})
 }
 
 function Format-PrinterAsNamedUNC {
@@ -3796,11 +3839,11 @@ $btnConnectSelected.Add_Click({
         $alternateIp = ''
         if ($srv -match '((?:\d{1,3}\.){3}\d{1,3})') { $alternateIp = $matches[1] }
         $requestAccount = {
-            param($server)
+            param($server,$failure)
             $btnCancelConnection.Visible = $false
             Hide-LoadingIndicator -Button $btnConnectSelected
             try {
-                Request-PrinterServerCredential -Server $server -InitialUser $txtNetUser.Text.Trim() -Parent $form
+                Request-PrinterServerCredential -Server $server -InitialUser $txtNetUser.Text.Trim() -Parent $form -Reason (Get-PrinterCredentialReason $failure)
             } finally {
                 Show-LoadingIndicator -Message "Conectando a impressora $unc..." -Button $btnConnectSelected
                 $btnCancelConnection.Visible = $true
@@ -4012,9 +4055,12 @@ $btnManualConnect.Add_Click({
         $btnCancelConnection.Enabled = $true
         $btnCancelConnection.Visible = $true
         Show-LoadingIndicator -Message "Conectando a $unc..." -Button $btnManualConnect
-        $res = Connect-UNCPrinterSafe -UNCPath $unc
+        $res = Connect-PrinterUsingAvailableSession -UNCPath $unc -RequestCredential {
+            param($hostName,$failure)
+            Request-PrinterServerCredential -Server $hostName -Parent $form -Reason (Get-PrinterCredentialReason $failure)
+        }
         $fallbackHandled = $false
-        if (-not $res.Success -and -not $res.Simulated -and $res.Code -notin @(53,1223) -and $script:currentWindowsBuild -lt 22000) {
+        if (-not $res.Cascaded -and -not $res.CredentialPrompted -and -not $res.Success -and -not $res.Simulated -and $res.Code -notin @(53,1223) -and $script:currentWindowsBuild -lt 22000) {
             $btnCancelConnection.Visible = $false
             Hide-LoadingIndicator -Button $btnManualConnect
             $offer = Offer-Win10LocalPortFallback -UNCPath $unc -PreviousResult $res

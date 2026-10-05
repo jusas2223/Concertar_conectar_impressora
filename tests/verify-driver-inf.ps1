@@ -27,14 +27,14 @@ try{
 
     $t=$null;$e=$null
     $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'src\scripts\DRIVER-DO-SERVIDOR.ps1'),[ref]$t,[ref]$e)
-    foreach($name in @('Get-PackageKey','Get-SafeFileName','Find-RemoteInfPackage','Copy-ExactDriverDirectory')){
+    foreach($name in @('Set-DriverStage','Copy-DriverSourceFile','Get-PackageKey','Get-SafeFileName','Find-RemoteInfPackage','Copy-ExactDriverDirectory')){
         $fn=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true) | Select-Object -First 1
         . ([scriptblock]::Create($fn.Extent.Text))
     }
     Add-Type -TypeDefinition 'public static class PrinterDriverTransfer {public static string QueueDriver(string name){return "Modelo exato";} public static string DriverInf(string name,string environment){return "modelo.inf";}}'
-    function Test-Path {param($LiteralPath,$PathType)
-        if($LiteralPath -like '\\*') {return -not $LiteralPath.EndsWith('package.json')}
-        return (Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath -PathType $PathType)
+    function Test-PrinterRemotePath {param($Path,[switch]$Directory)
+        if($Path -like '\\*') {return -not $Path.EndsWith('package.json')}
+        return (Microsoft.PowerShell.Management\Test-Path -LiteralPath $Path)
     }
     function Get-ChildItem {param($LiteralPath,$Filter,[switch]$Recurse,[switch]$File,[switch]$Directory,$ErrorAction)
         $where=if($LiteralPath -like '\\*'){$temp}else{$LiteralPath}

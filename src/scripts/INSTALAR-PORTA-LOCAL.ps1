@@ -141,16 +141,19 @@ try {
         }
     }
 } catch {
-    $result = @{
-        Success = $false
-        Stage = $stage
-        Message = $_.Exception.Message
-        HResult = ('0x{0:X8}' -f ([long]$_.Exception.HResult -band 4294967295))
-        ErrorId = [string]$_.FullyQualifiedErrorId
-        PortMethod = $portMethod
-        CimPortError = $cimPortError
-        NativeCode = $(if ($_.Exception.GetBaseException() -is [ComponentModel.Win32Exception]) { $_.Exception.GetBaseException().NativeErrorCode } else { $null })
+    $result=Get-PrinterOperationFailure -Record $_ -Stage $stage -Resource $unc -Scope Local
+    # Port creation touches both the local monitor and the remote queue. A local
+    # denial must not be advertised as a missing network password.
+    if($result.NativeCode -eq 5 -and $stage -in @('Criar porta local UNC','Validar e criar porta UNC no monitor local do Windows')){
+        try{
+            $remoteCode=Test-PrinterRemoteQueueAccess -UNCPath $unc
+            $result.RemoteAccessCode=$remoteCode
+            if($remoteCode -in @(5,86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202)){
+                $result.NeedsAuthentication=$true;$result.FailureScope='Remote'
+            }
+        }catch{$result.RemoteAccessProbeMessage=$_.Exception.Message}
     }
+    $result.PortMethod=$portMethod;$result.CimPortError=$cimPortError
 }
 
 if(-not $ResultPath){return $result}
