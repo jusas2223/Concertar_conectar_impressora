@@ -1,4 +1,4 @@
-﻿# Conexão em cascata — versão 1.10.1
+﻿# Conexão em cascata — versão 1.10.2
 
 ## Pelo executável
 
@@ -7,6 +7,17 @@
 3. A conexão aplica as políticas locais do cliente, reinicia o Spooler, executa a cascata e envia uma página de validação. O prazo total do worker é 180 segundos, com cancelamento; o encerramento inclui os processos filhos, como PnPUtil.
 
 As políticas solicitadas reduzem as restrições de instalação de drivers e permitem guest no cliente. Os valores anteriores do Registro ficam em `%LOCALAPPDATA%\AssistenteImpressoras\Politicas`. A permissão concedida a print$ é de leitura; não dá acesso de gravação. Políticas de domínio podem prevalecer ou reaplicar configurações.
+
+## Escolha do endereço do servidor
+
+Na aba Impressoras da rede, use Conectar por:
+
+- Nome do computador (hostname), padrão: mantém a fila como \\NOME_DO_PC\Compartilhamento. Não salva o IP no caminho da fila. Preserva também nomes completos de domínio.
+- Endereço IP: conecta como \\IP\Compartilhamento. Se a fila foi descoberta por nome, consulta o IP atual ao clicar em Conectar. Havendo vários endereços, prefere o IP descoberto quando ele ainda consta na resolução atual. Se não houver resposta, pode usar o IP mostrado pela descoberta.
+
+O destino é mostrado ao lado da escolha. A prévia usa apenas os dados da tabela; não consulta a rede a cada mudança de seleção. A resolução no clique é limitada por tempo e não usa consulta WMI remota. Se o hostname não for identificado, o operador informa o nome em Buscar servidor ou seleciona IP; não há troca silenciosa de modo.
+
+Conectar, Instalar por porta local e os diagnósticos seguem a seleção. A credencial já confirmada pode ser reutilizada entre aliases de nome/IP do mesmo registro descoberto. Ela não é aplicada a outro servidor. A aba Instalar por caminho continua aceitando o UNC digitado explicitamente. Impressoras com IP próprio continuam no fluxo Instalar por IP.
 
 ## Conta somente quando necessário
 

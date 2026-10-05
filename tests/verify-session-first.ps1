@@ -3,8 +3,10 @@ $root=Split-Path -Parent $PSScriptRoot
 $t=$null;$e=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'src\AssistenteImpressoras.ps1'),[ref]$t,[ref]$e)
 if($e.Count){throw $e[0].Message}
-$fn=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Connect-PrinterUsingAvailableSession'},$true)|Select-Object -First 1
-. ([scriptblock]::Create($fn.Extent.Text))
+foreach($name in @('Connect-PrinterUsingAvailableSession','Use-PrinterCredentialForEndpoint')){
+ $fn=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)|Select-Object -First 1
+ . ([scriptblock]::Create($fn.Extent.Text))
+}
 function Write-AppLog {param($Message,$Level) if($Message.Contains('Fixture-password')){throw 'Senha no log'}}
 function Connect-UNCPrinterSafe {
  param($UNCPath,$AlternateHost)

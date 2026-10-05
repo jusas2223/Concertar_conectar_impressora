@@ -170,12 +170,13 @@ function Set-PrinterAppLayout {
             $control.SetBounds(745,57,155,25)
         }
     }
-    $pnlNetBottom.Height=76
+    $pnlNetBottom.Height=108
     $pnlNetBottom.BackColor=[Drawing.Color]::White
-    $bottom=$pnlNetBottom;$connect=$btnConnectSelected;$local=$btnLocalPortSelected
+    $bottom=$pnlNetBottom;$connect=$btnConnectSelected;$local=$btnLocalPortSelected;$destination=$lblNetConnectionPath
     $layoutActions={
-        $connect.SetBounds($bottom.ClientSize.Width-242,14,230,42)
-        $local.SetBounds($bottom.ClientSize.Width-466,14,214,42)
+        $connect.SetBounds($bottom.ClientSize.Width-242,48,230,42)
+        $local.SetBounds($bottom.ClientSize.Width-466,48,214,42)
+        $destination.Width=[Math]::Max(100,$bottom.ClientSize.Width-350)
     }.GetNewClosure()
     $pnlNetBottom.Add_Resize($layoutActions);& $layoutActions
     $btnConnectSelected.BackColor=[Drawing.ColorTranslator]::FromHtml('#18794E')

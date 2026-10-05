@@ -1236,11 +1236,13 @@ function Connect-UNCPrinterSafe {
 }
 
 function Connect-PrinterUsingAvailableSession {
-    param([string]$UNCPath, [string]$AlternateHost='', [scriptblock]$RequestCredential)
+    param([string]$UNCPath, [string]$AlternateHost='', [scriptblock]$RequestCredential,
+        [string[]]$CredentialServerAliases=@())
 
     # Uma tentativa com a identidade atual ou com a conta já confirmada.
     # Nunca repetir um job/fila instalada nem interpretar 709/87 como senha ausente.
     $server = ([regex]::Match($UNCPath, '^\\\\([^\\]+)\\')).Groups[1].Value
+    Use-PrinterCredentialForEndpoint -Server $server -Aliases $CredentialServerAliases
     $hasCredential = $script:authenticatedPrinterServer -ieq $server -and
         $null -ne $script:authenticatedPrinterCredential
     $result = Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost
@@ -1515,7 +1517,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.10.1]"
+$form.Text = "Arrumar Impressora VG [v1.10.2]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1833,6 +1835,88 @@ function Get-HostAndIpDisplay {
         return $ipAddr
     }
     return $clean
+}
+
+function Use-PrinterCredentialForEndpoint {
+    param([string]$Server, [string[]]$Aliases=@())
+    # Os aliases vêm do mesmo registro descoberto; nunca de outra fila.
+    if ($script:authenticatedPrinterCredential -and $script:authenticatedPrinterServer -and
+        $Aliases -icontains $script:authenticatedPrinterServer -and
+        $script:authenticatedPrinterServer -ine $Server) {
+        $script:authenticatedPrinterServer = $Server
+        Write-AppLog -Message "Reutilizando a conta já informada para o destino selecionado: $Server." -Level INFO
+    }
+}
+
+function Resolve-PrinterEndpointAddresses {
+    param([string]$Server, [ValidateSet('Hostname','IP')][string]$Mode)
+    $async = $null
+    try {
+        if ($Mode -eq 'Hostname') {
+            $name = Get-NetBiosNameDirect -TargetIP $Server
+            if ($name) { return $name }
+            $async = [Net.Dns]::BeginGetHostEntry($Server,$null,$null)
+            if ($async.AsyncWaitHandle.WaitOne(800)) {
+                $entry = [Net.Dns]::EndGetHostEntry($async)
+                if ($entry.HostName) { return $entry.HostName.TrimEnd('.') }
+            }
+        } else {
+            $async = [Net.Dns]::BeginGetHostAddresses($Server,$null,$null)
+            if ($async.AsyncWaitHandle.WaitOne(1000)) {
+                return @([Net.Dns]::EndGetHostAddresses($async) | Where-Object {
+                    $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+                    $_.IPAddressToString -notlike '127.*'
+                } | ForEach-Object { $_.IPAddressToString })
+            }
+        }
+    } catch {} finally {
+        if ($async) { $async.AsyncWaitHandle.Close() }
+    }
+    return @()
+}
+
+function Resolve-PrinterConnectionEndpoint {
+    param([string]$UNCPath, [string]$ServerDisplay='',
+        [ValidateSet('Hostname','IP')][string]$Mode='Hostname', [switch]$Preview)
+    $match = [regex]::Match($UNCPath.Trim(), '^\\\\([^\\]+)\\([^\\]+)$')
+    if (-not $match.Success) { return @{Success=$false;Message='Selecione uma impressora compartilhada com caminho UNC válido.'} }
+    $originalServer = $match.Groups[1].Value
+    $share = $match.Groups[2].Value
+    $displayParts = @($ServerDisplay -split '\s+\\\s+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $knownName = @($displayParts | Where-Object { $_ -match '^[A-Za-z0-9._-]+$' -and $_ -notmatch '^\d+(\.\d+){3}$' } | Select-Object -First 1)
+    $knownIp = @($displayParts | Where-Object { $_ -match '^\d+(\.\d+){3}$' } | Select-Object -First 1)
+    $parsed = $null
+    $originalIsIp = [Net.IPAddress]::TryParse($originalServer,[ref]$parsed)
+    if ((-not $originalIsIp -and $originalServer -notmatch '^[A-Za-z0-9._-]+$') -or
+        ($originalServer -match '^\d+(\.\d+){3}$' -and -not $originalIsIp) -or
+        ($originalIsIp -and $parsed.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork)) {
+        return @{Success=$false;Message='Informe um hostname ou endereço IPv4 válido.'}
+    }
+    $target = $originalServer
+    if ($Mode -eq 'Hostname' -and $originalIsIp) {
+        $target = if ($knownName.Count) { [string]$knownName[0] } else { '' }
+        if (-not $target -and -not $Preview) {
+            $target = [string](@(Resolve-PrinterEndpointAddresses -Server $originalServer -Mode Hostname) | Select-Object -First 1)
+        }
+        $ip = $null
+        if (-not $target -or [Net.IPAddress]::TryParse($target,[ref]$ip) -or $target -notmatch '^[A-Za-z0-9._-]+$') {
+            return @{Success=$false;Message='Hostname não identificado. Informe o nome do computador em Buscar servidor, ou selecione Endereço IP.'}
+        }
+    } elseif ($Mode -eq 'IP' -and -not $originalIsIp) {
+        $addresses = @()
+        if (-not $Preview) { $addresses = @(Resolve-PrinterEndpointAddresses -Server $originalServer -Mode IP) }
+        # Preferir a resolução atual; o IP descoberto só é usado se não houver resposta.
+        $target = if ($addresses.Count) {
+            if ($knownIp.Count -and $addresses -contains $knownIp[0]) { [string]$knownIp[0] } else { [string]$addresses[0] }
+        } elseif ($knownIp.Count) { [string]$knownIp[0] } else { '' }
+        $ip = $null
+        if (-not $target -or -not [Net.IPAddress]::TryParse($target,[ref]$ip) -or
+            $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+            return @{Success=$false;Message='IP não identificado. Informe o endereço em Buscar servidor, ou selecione Nome do computador.'}
+        }
+    }
+    $aliases = @(@($originalServer,$target) + $displayParts | Select-Object -Unique)
+    return @{Success=$true;Server=$target;ShareName=$share;UNCPath=('\\'+$target+'\'+$share);Mode=$Mode;Aliases=$aliases}
 }
 
 function Format-PrinterAsNamedUNC {
@@ -2741,25 +2825,48 @@ $dgvNetPrinters.BringToFront()
 # Painel Inferior de Conexao
 $pnlNetBottom = New-Object System.Windows.Forms.Panel
 $pnlNetBottom.Dock = [System.Windows.Forms.DockStyle]::Bottom
-$pnlNetBottom.Height = 65
+$pnlNetBottom.Height = 108
 $tab3.Controls.Add($pnlNetBottom)
+
+$lblNetEndpointMode = New-Object System.Windows.Forms.Label
+$lblNetEndpointMode.Text = 'Conectar por:'
+$lblNetEndpointMode.Location = New-Object System.Drawing.Point(12, 12)
+$lblNetEndpointMode.AutoSize = $true
+$pnlNetBottom.Controls.Add($lblNetEndpointMode)
+
+$cmbNetEndpointMode = New-Object System.Windows.Forms.ComboBox
+$cmbNetEndpointMode.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$cmbNetEndpointMode.Location = New-Object System.Drawing.Point(100, 8)
+$cmbNetEndpointMode.Size = New-Object System.Drawing.Size(225, 25)
+[void]$cmbNetEndpointMode.Items.Add('Nome do computador (hostname)')
+[void]$cmbNetEndpointMode.Items.Add('Endereço IP')
+$cmbNetEndpointMode.SelectedIndex = 0
+$pnlNetBottom.Controls.Add($cmbNetEndpointMode)
+
+$lblNetConnectionPath = New-Object System.Windows.Forms.Label
+$lblNetConnectionPath.Text = 'Selecione uma impressora para ver o destino.'
+$lblNetConnectionPath.Location = New-Object System.Drawing.Point(338, 12)
+$lblNetConnectionPath.Size = New-Object System.Drawing.Size(550, 22)
+$lblNetConnectionPath.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
+$lblNetConnectionPath.AutoEllipsis = $true
+$pnlNetBottom.Controls.Add($lblNetConnectionPath)
 
 $chkNetDefault = New-Object System.Windows.Forms.CheckBox
 $chkNetDefault.Text = "Definir como impressora padrao apos conectar"
-$chkNetDefault.Location = New-Object System.Drawing.Point(12, 12)
+$chkNetDefault.Location = New-Object System.Drawing.Point(12, 48)
 $chkNetDefault.AutoSize = $true
 $pnlNetBottom.Controls.Add($chkNetDefault)
 
 $chkNetTestPage = New-Object System.Windows.Forms.CheckBox
 $chkNetTestPage.Text = "Imprimir pagina de teste apos conectar"
-$chkNetTestPage.Location = New-Object System.Drawing.Point(12, 36)
+$chkNetTestPage.Location = New-Object System.Drawing.Point(12, 72)
 $chkNetTestPage.AutoSize = $true
 $pnlNetBottom.Controls.Add($chkNetTestPage)
 
 $btnConnectSelected = New-Object System.Windows.Forms.Button
 $btnConnectSelected.Text = "Conectar Impressora Selecionada"
 $btnConnectSelected.Size = New-Object System.Drawing.Size(260, 42)
-$btnConnectSelected.Location = New-Object System.Drawing.Point(620, 10)
+$btnConnectSelected.Location = New-Object System.Drawing.Point(620, 48)
 $btnConnectSelected.BackColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
 $btnConnectSelected.ForeColor = [System.Drawing.Color]::White
 $btnConnectSelected.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -2769,12 +2876,36 @@ $pnlNetBottom.Controls.Add($btnConnectSelected)
 $btnLocalPortSelected = New-Object System.Windows.Forms.Button
 $btnLocalPortSelected.Text = 'Instalar via porta local'
 $btnLocalPortSelected.Size = New-Object System.Drawing.Size(225, 42)
-$btnLocalPortSelected.Location = New-Object System.Drawing.Point(385, 10)
+$btnLocalPortSelected.Location = New-Object System.Drawing.Point(385, 48)
 $btnLocalPortSelected.BackColor = [System.Drawing.Color]::FromArgb(20, 90, 145)
 $btnLocalPortSelected.ForeColor = [System.Drawing.Color]::White
 $btnLocalPortSelected.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $btnLocalPortSelected.Font = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
 $pnlNetBottom.Controls.Add($btnLocalPortSelected)
+
+function Get-SelectedPrinterConnectionTarget {
+    param([switch]$Preview)
+    if ($dgvNetPrinters.SelectedRows.Count -eq 0) { return @{Success=$false;Message='Selecione uma impressora na tabela.'} }
+    $row = $dgvNetPrinters.SelectedRows[0]
+    $path = Format-PrinterAsNamedUNC ([string]$row.Cells['UNC'].Value)
+    if ([string]$row.Cells['Type'].Value -like '*TCP/IP*' -or $path -like 'IP_*') {
+        return @{Success=$true;Direct=$true;UNCPath=$path}
+    }
+    $mode = if ($cmbNetEndpointMode.SelectedIndex -eq 1) { 'IP' } else { 'Hostname' }
+    return (Resolve-PrinterConnectionEndpoint -UNCPath $path -ServerDisplay ([string]$row.Cells['Server'].Value) -Mode $mode -Preview:$Preview)
+}
+
+function Update-PrinterConnectionTargetPreview {
+    $target = Get-SelectedPrinterConnectionTarget -Preview
+    $cmbNetEndpointMode.Enabled = -not $target.Direct
+    $lblNetConnectionPath.Text = if ($target.Success) {
+        if ($target.Direct) { 'Impressora com IP próprio: use Instalar por IP.' } else { 'Destino: '+$target.UNCPath }
+    } elseif ($dgvNetPrinters.SelectedRows.Count) {
+        if ($cmbNetEndpointMode.SelectedIndex -eq 1) { 'O endereço IP será resolvido ao conectar.' } else { 'Informe o hostname em Buscar servidor, ou escolha Endereço IP.' }
+    } else { 'Selecione uma impressora para ver o destino.' }
+}
+$cmbNetEndpointMode.Add_SelectedIndexChanged({ Update-PrinterConnectionTargetPreview })
+$dgvNetPrinters.Add_SelectionChanged({ Update-PrinterConnectionTargetPreview })
 
 function Get-SubnetAddressCandidates {
     param([string]$IPAddress, [string]$SubnetMask)
@@ -3209,7 +3340,12 @@ $btnFixNetwork24H2.Add_Click({
             return
         }
         $row = $dgvNetPrinters.SelectedRows[0]
-        $unc = Format-PrinterAsNamedUNC ([string]$row.Cells['UNC'].Value)
+        $target = Get-SelectedPrinterConnectionTarget
+        if (-not $target.Success) {
+            [System.Windows.Forms.MessageBox]::Show($form, $target.Message, 'Destino da conexão', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            return
+        }
+        $unc = $target.UNCPath
         $alternateIp = ''
         $serverDisplay = [string]$row.Cells['Server'].Value
         if ($serverDisplay -match '((?:\d{1,3}\.){3}\d{1,3})') { $alternateIp = $matches[1] }
@@ -3495,7 +3631,12 @@ $btnDiagnoseShare.Add_Click({
         [System.Windows.Forms.MessageBox]::Show($form, 'Selecione uma impressora compartilhada na lista.', 'Diagnóstico detalhado', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
     }
-    $unc = Format-PrinterAsNamedUNC ([string]$dgvNetPrinters.SelectedRows[0].Cells['UNC'].Value)
+    $target = Get-SelectedPrinterConnectionTarget
+    if (-not $target.Success) {
+        [System.Windows.Forms.MessageBox]::Show($form, $target.Message, 'Destino da conexão', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    $unc = $target.UNCPath
     if ($unc -notmatch '^\\\\([^\\]+)\\([^\\]+)$') {
         [System.Windows.Forms.MessageBox]::Show($form, 'O diagnóstico detalhado requer o caminho \\SERVIDOR\Fila.', 'Diagnóstico detalhado', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
         return
@@ -3533,7 +3674,12 @@ $btnLocalPortSelected.Add_Click({
     }
     $selectedRow = $dgvNetPrinters.SelectedRows[0]
     $tipo = [string]$selectedRow.Cells['Type'].Value
-    $unc = Format-PrinterAsNamedUNC ([string]$selectedRow.Cells['UNC'].Value)
+    $target = Get-SelectedPrinterConnectionTarget
+    if (-not $target.Success) {
+        [System.Windows.Forms.MessageBox]::Show($form, $target.Message, 'Destino da conexão', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    $unc = $target.UNCPath
     if ($tipo -like '*TCP/IP*' -or $unc -notmatch '^\\\\[^\\]+\\[^\\]+$') {
         [System.Windows.Forms.MessageBox]::Show('A porta local é para uma impressora compartilhada no formato \\SERVIDOR\Fila. Para uma impressora com IP próprio, use Instalar por IP.', 'Caminho inválido', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -3552,6 +3698,7 @@ $btnLocalPortSelected.Add_Click({
         [System.Windows.Forms.MessageBox]::Show('O computador que compartilha a impressora não responde na porta SMB 445 pelo nome nem pelo IP. Verifique a rede antes de instalar a fila.', 'Servidor inacessível', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
     }
+    Use-PrinterCredentialForEndpoint -Server $server -Aliases $target.Aliases
     $localResult = Show-LocalPortFallbackDialog -UNCPath $unc -AlternateHost $alternateIp -Direct
     if (-not $localResult -or -not $localResult.Success) { return }
     $localName = [string]$localResult.ConnectedUNC
@@ -3591,6 +3738,14 @@ $btnConnectSelected.Add_Click({
         }
         return
     }
+
+    $target = Get-SelectedPrinterConnectionTarget
+    if (-not $target.Success) {
+        [System.Windows.Forms.MessageBox]::Show($form, $target.Message, 'Destino da conexão', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    $unc = $target.UNCPath
+    Write-AppLog -Message ("Destino escolhido ($($target.Mode)): $unc.") -Level INFO
 
     # A busca manual não é obrigatória para autenticar: o botão de conexão
     # aplica as credenciais preenchidas à fila selecionada antes de chamar RPC.
@@ -3642,7 +3797,7 @@ $btnConnectSelected.Add_Click({
                 $btnCancelConnection.Visible = $true
             }
         }
-        $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount
+        $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount -CredentialServerAliases $target.Aliases
         if ($script:authenticatedPrinterServer -ieq $serverForConnection -and $script:authenticatedPrinterUser) {
             $txtNetUser.Text = $script:authenticatedPrinterUser
         }
