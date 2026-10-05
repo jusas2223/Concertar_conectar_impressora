@@ -183,7 +183,7 @@ function Request-PrinterServerCredential {
     $dialog.MinimizeBox = $false
 
     $instruction = New-Object System.Windows.Forms.Label
-    $instruction.Text = 'Use uma conta do PC que compartilha a impressora. Digite a senha da conta, não o PIN.'
+    $instruction.Text = 'O Windows recusou o acesso com a sessão atual. Use uma conta com permissão no servidor e a senha da conta, não o PIN.'
     $instruction.Location = New-Object System.Drawing.Point(15, 12)
     $instruction.Size = New-Object System.Drawing.Size(410, 35)
     $dialog.Controls.Add($instruction)
@@ -219,7 +219,7 @@ function Request-PrinterServerCredential {
     $dialog.AcceptButton = $connectButton
 
     $withoutButton = New-Object System.Windows.Forms.Button
-    $withoutButton.Text = 'Tentar sem senha'
+    $withoutButton.Text = 'Manter sessão atual'
     $withoutButton.Location = New-Object System.Drawing.Point(137, 137)
     $withoutButton.Size = New-Object System.Drawing.Size(135, 32)
     $withoutButton.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
@@ -1235,6 +1235,43 @@ function Connect-UNCPrinterSafe {
     return $attempt
 }
 
+function Connect-PrinterUsingAvailableSession {
+    param([string]$UNCPath, [string]$AlternateHost='', [scriptblock]$RequestCredential)
+
+    # Uma tentativa com a identidade atual ou com a conta já confirmada.
+    # Nunca repetir um job/fila instalada nem interpretar 709/87 como senha ausente.
+    $server = ([regex]::Match($UNCPath, '^\\\\([^\\]+)\\')).Groups[1].Value
+    $hasCredential = $script:authenticatedPrinterServer -ieq $server -and
+        $null -ne $script:authenticatedPrinterCredential
+    $result = Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost
+    if ($result.Success -or $result.Simulated -or $result.QueueInstalled -or
+        $result.Code -in @(1223,1460) -or $hasCredential -or -not $RequestCredential) { return $result }
+    $needsAccount = $result.NeedsAuthentication -or $result.Code -in @(86,1244,1326,1909,2202)
+    if (-not $needsAccount) { return $result }
+
+    Write-AppLog -Message "A sessão atual foi recusada em $server; solicitando uma conta com permissão uma vez." -Level AVISO
+    $choice = & $RequestCredential $server
+    if (-not $choice -or $choice.Cancelled) {
+        return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada na solicitação de conta.'}
+    }
+    if ($choice.WithoutCredential) { return $result }
+    try {
+        if (-not $choice.User -or -not $choice.Password) {
+            return @{Success=$false;Code=87;Cascaded=$true;Message='Informe usuário e senha juntos para usar outra conta.'}
+        }
+        $credential = New-Object Management.Automation.PSCredential($choice.User,
+            (ConvertTo-SecureString $choice.Password -AsPlainText -Force))
+        $auth = Connect-PrinterServerAuthenticated -Server $server -User $choice.User -Password $choice.Password
+        if (-not $auth.Success) { return @{Success=$false;Code=$auth.Code;Cascaded=$true;Message=$auth.Message} }
+        $script:authenticatedPrinterServer = $server
+        $script:authenticatedPrinterUser = $choice.User
+        $script:authenticatedPrinterCredential = $credential
+        Write-AppLog -Message "Conta confirmada para $server; repetindo a conexão uma única vez." -Level INFO
+    } finally { $choice.Password = $null }
+    # A segunda tentativa mantém a credencial em memória e não abre outro diálogo.
+    return (Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost)
+}
+
 function Ensure-RemotePrinterConnectedAndDriverInstalled {
     param([string]$UNCPath)
     if (-not $UNCPath -or $UNCPath -notlike "\\*") { return @{ Success = $true } }
@@ -1478,7 +1515,7 @@ function Reset-PrintersStateSafe {
 # ------------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Arrumar Impressora VG [v1.10.0]"
+$form.Text = "Arrumar Impressora VG [v1.10.1]"
 $form.Size = New-Object System.Drawing.Size(990, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -2667,7 +2704,7 @@ $btnFindShares.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
 $pnlNetSearch.Controls.Add($btnFindShares)
 
 $lblNetAuthNote = New-Object System.Windows.Forms.Label
-$lblNetAuthNote.Text = 'Se informar uma conta do servidor, a sessão autenticada permanecerá ativa para instalar a impressora. Ex.: SERVIDOR\usuario.'
+$lblNetAuthNote.Text = 'Usuário e senha são opcionais. Deixe em branco para usar o acesso atual do Windows.'
 $lblNetAuthNote.Location = New-Object System.Drawing.Point(15, 88)
 $lblNetAuthNote.Size = New-Object System.Drawing.Size(820, 19)
 $lblNetAuthNote.ForeColor = [System.Drawing.Color]::DimGray
@@ -3185,9 +3222,9 @@ $btnFixNetwork24H2.Add_Click({
             if ($script:authenticatedPrinterServer -ieq $diagnosis.Server) {
                 $message += "`n`nA sessão SMB já foi autenticada como $script:authenticatedPrinterUser. A consulta de gerenciamento negada não comprova que a impressão será negada. Tente conectar; se falhar, confira o driver e execute o EXE como administrador."
             } else {
-                $message += "`n`nDigite acima o usuário e a senha de uma conta do computador servidor, clique em 'Buscar Compartilhamentos' e tente a conexão. Use a senha da conta, não o PIN."
+                $message += "`n`nTente primeiro Conectar Impressora Selecionada, sem preencher conta. A consulta de gerenciamento negada não prova recusa de impressão. O programa só solicitará outra conta se detectar recusa de acesso na conexão."
             }
-            [System.Windows.Forms.MessageBox]::Show($form, $message, 'Autenticação necessária',
+            [System.Windows.Forms.MessageBox]::Show($form, $message, 'Consulta remota recusada',
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             $txtNetUser.Focus() | Out-Null
             return
@@ -3368,7 +3405,7 @@ $btnFindShares.Add_Click({
     # Manter a sessão SMB autenticada para a instalação subsequente.
     $user = $txtNetUser.Text.Trim()
     $pass = $txtNetPass.Text
-    if (($user -and -not $pass) -or ($pass -and -not $user)) {
+    if ($pass -and -not $user) {
         $txtNetPass.Clear()
         [System.Windows.Forms.MessageBox]::Show($form, 'Informe usuário e senha juntos para autenticar no servidor.', 'Credenciais incompletas', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
@@ -3519,7 +3556,7 @@ $btnLocalPortSelected.Add_Click({
     if (-not $localResult -or -not $localResult.Success) { return }
     $localName = [string]$localResult.ConnectedUNC
     if ($chkNetDefault.Checked) { Set-DefaultPrinterSafe -PrinterName $localName | Out-Null }
-    if ($chkNetTestPage.Checked -and -not $result.JobValidated) { Invoke-PrintUICommand -Arguments ('/k /n "' + $localName + '"') | Out-Null }
+    if ($chkNetTestPage.Checked -and -not $localResult.JobValidated) { Invoke-PrintUICommand -Arguments ('/k /n "' + $localName + '"') | Out-Null }
     Refresh-PrintersGrid
     $selectedRow.Cells['Status'].Value = 'Ja Instalada no Sistema'
     $selectedRow.DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
@@ -3560,34 +3597,7 @@ $btnConnectSelected.Add_Click({
     $serverForConnection = ([regex]::Match($unc, '^\\\\([^\\]+)\\')).Groups[1].Value
     $enteredUser = $txtNetUser.Text.Trim()
     $enteredPassword = $txtNetPass.Text
-    $storedCredentialMatches = $script:authenticatedPrinterServer -ieq $serverForConnection -and
-        $script:authenticatedPrinterCredential -and
-        (-not $enteredUser -or $script:authenticatedPrinterUser -ieq $enteredUser)
-    if (-not $global:SimulationMode -and -not ($enteredUser -and $enteredPassword) -and -not $storedCredentialMatches) {
-        $authChoice = Request-PrinterServerCredential -Server $serverForConnection -InitialUser $enteredUser -Parent $form
-        if ($authChoice.Cancelled) { return }
-        if ($authChoice.WithoutCredential) {
-            $enteredUser = ''
-            $enteredPassword = ''
-            $script:authenticatedPrinterServer = ''
-            $script:authenticatedPrinterUser = ''
-            $script:authenticatedPrinterCredential = $null
-            Write-AppLog -Message "Usuário escolheu tentar $serverForConnection sem credenciais explícitas." -Level 'AVISO'
-        } else {
-            $enteredUser = [string]$authChoice.User
-            $enteredPassword = [string]$authChoice.Password
-            if (-not $enteredUser -or -not $enteredPassword) {
-                [System.Windows.Forms.MessageBox]::Show($form, 'Preencha usuário e senha da conta do servidor.',
-                    'Credenciais incompletas', [System.Windows.Forms.MessageBoxButtons]::OK,
-                    [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-                return
-            }
-            $txtNetUser.Text = $enteredUser
-        }
-    }
-    if (($enteredUser -and -not $enteredPassword -and
-        ($script:authenticatedPrinterServer -ine $serverForConnection -or $script:authenticatedPrinterUser -ine $enteredUser)) -or
-        ($enteredPassword -and -not $enteredUser)) {
+    if ($enteredPassword -and -not $enteredUser) {
         [System.Windows.Forms.MessageBox]::Show($form,
             "Informe usuário e senha juntos. Use uma conta do computador $serverForConnection e a senha da conta, não o PIN.",
             'Credenciais incompletas', [System.Windows.Forms.MessageBoxButtons]::OK,
@@ -3621,7 +3631,21 @@ $btnConnectSelected.Add_Click({
         Show-LoadingIndicator -Message "Conectando a impressora $unc..." -Button $btnConnectSelected
         $alternateIp = ''
         if ($srv -match '((?:\d{1,3}\.){3}\d{1,3})') { $alternateIp = $matches[1] }
-        $result = Connect-UNCPrinterSafe -UNCPath $unc -AlternateHost $alternateIp
+        $requestAccount = {
+            param($server)
+            $btnCancelConnection.Visible = $false
+            Hide-LoadingIndicator -Button $btnConnectSelected
+            try {
+                Request-PrinterServerCredential -Server $server -InitialUser $txtNetUser.Text.Trim() -Parent $form
+            } finally {
+                Show-LoadingIndicator -Message "Conectando a impressora $unc..." -Button $btnConnectSelected
+                $btnCancelConnection.Visible = $true
+            }
+        }
+        $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount
+        if ($script:authenticatedPrinterServer -ieq $serverForConnection -and $script:authenticatedPrinterUser) {
+            $txtNetUser.Text = $script:authenticatedPrinterUser
+        }
         $fallbackHandled = $false
         if (-not $result.Cascaded -and -not $result.Success -and -not $result.Simulated -and $result.Code -notin @(53,1223,1801) -and $script:currentWindowsBuild -lt 22000) {
             $btnCancelConnection.Visible = $false
@@ -3675,7 +3699,7 @@ $btnConnectSelected.Add_Click({
         $authAdvice = if ($script:authenticatedPrinterServer -ieq $serverForAuth) {
             "A sessão SMB já foi autenticada como $script:authenticatedPrinterUser. O erro persistiu após a autenticação.`n"
         } else {
-            "Esta tentativa usou a conta local $env:USERDOMAIN\$env:USERNAME, sem credenciais do servidor. Clique novamente em 'Conectar Impressora Selecionada' e informe a conta de $serverForAuth quando solicitado. Use a senha da conta, não o PIN.`n"
+            "Esta tentativa usou a conta local $env:USERDOMAIN\$env:USERNAME, sem credenciais do servidor. O código 0x709 não identifica sozinho uma falha de autenticação. Se precisar usar outra conta, preencha usuário e senha na busca manual. Use a senha da conta, não o PIN.`n"
         }
         $advice = "A fila $unc existe na rede, mas o Windows recusou a conexão com 0x80070709.`n`n" +
             $authAdvice +

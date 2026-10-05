@@ -1,12 +1,20 @@
-# Conexão em cascata — versão 1.10.0
+﻿# Conexão em cascata — versão 1.10.1
 
 ## Pelo executável
 
 1. No servidor, selecione a impressora local compartilhada e clique em **Preparar host e driver**. Aplica as políticas de RPC solicitadas, concede leitura a Usuários Autenticados em print$, reinicia o Spooler e publica o pacote quando necessário.
-2. No cliente, abra o mesmo EXE, informe a conta do servidor em **Buscar servidor**, selecione a fila e clique em **Conectar impressora**. O EXE solicita elevação na abertura, antes de coletar as credenciais.
+2. No cliente, abra o mesmo EXE, selecione a fila e clique em **Conectar impressora**. Deixe usuário e senha em branco para usar o acesso atual do Windows. Se quiser usar outra conta desde o início, preencha ambos em **Buscar servidor**. O EXE solicita elevação na abertura, antes de coletar as credenciais.
 3. A conexão aplica as políticas locais do cliente, reinicia o Spooler, executa a cascata e envia uma página de validação. O prazo total do worker é 180 segundos, com cancelamento; o encerramento inclui os processos filhos, como PnPUtil.
 
 As políticas solicitadas reduzem as restrições de instalação de drivers e permitem guest no cliente. Os valores anteriores do Registro ficam em `%LOCALAPPDATA%\AssistenteImpressoras\Politicas`. A permissão concedida a print$ é de leitura; não dá acesso de gravação. Políticas de domínio podem prevalecer ou reaplicar configurações.
+
+## Conta somente quando necessário
+
+O botão verde tenta primeiro a sessão atual do Windows ou a credencial do servidor já confirmada em memória. O comportamento é o mesmo para Win10 → Win10 e Win10 → Win11. Não exige senha previamente só por causa da versão do Windows.
+
+Recusa de acesso/autenticação identificada no worker permite solicitar outra conta uma vez e repetir uma vez. Código 709, driver ausente, parâmetro inválido, servidor indisponível, conflito de sessão 1219, cancelamento e prazo excedido não abrem automaticamente a janela de conta. Fila já instalada com job em erro também não solicita conta nem reenvia o job. A escolha Manter sessão atual encerra a tentativa sem nova conexão.
+
+A credencial permanece somente em memória durante a execução. Não aparece em argumentos, logs ou arquivos. Ao selecionar outro servidor, a credencial anterior não é aplicada a ele; um campo de usuário sem senha não obriga autenticação antes de tentar a sessão atual. Permissões do servidor continuam determinando se o acesso atual é aceito.
 
 ## Os três níveis
 

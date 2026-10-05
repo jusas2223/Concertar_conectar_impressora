@@ -10,7 +10,7 @@ $ErrorActionPreference='Stop'
 $result=@{Success=$false;QueueInstalled=$false;Message='A conexão não foi concluída.'}
 $injected=$null
 $history=New-Object Collections.ArrayList
-$currentStage='Validar endereço'; $lastNativeError=0
+$currentStage='Validar endereço'; $lastNativeError=0; $authenticationRequired=$false
 function Write-ConnectionStage {
  param([string]$Text)
  [void]$history.Add($Text)
@@ -27,7 +27,7 @@ function Try-NativePrinterConnection {
   $base=$_.Exception.GetBaseException()
   $code=if($base -is [ComponentModel.Win32Exception]){$base.NativeErrorCode}else{([long]$base.HResult -band 65535)}
   if($_.FullyQualifiedErrorId -match '(?i)HRESULT\s+0x([0-9a-f]{8})'){$code=([Convert]::ToInt64($matches[1],16) -band 65535)}
-  return @{Success=$false;Code=$code;Message=$_.Exception.Message;ErrorId=[string]$_.FullyQualifiedErrorId}
+  return @{Success=$false;Code=$code;NeedsAuthentication=($code -in @(5,86,1244,1326,1909,2202));Message=$_.Exception.Message;ErrorId=[string]$_.FullyQualifiedErrorId}
  }
 }
 function Complete-PrinterConnection {
@@ -76,7 +76,8 @@ try{
    if($native.Success){$result=Complete-PrinterConnection -Printer $native.Printer -Level Native -LocalPort $false}
    else{
     $lastNativeError=$native.Code;Write-ConnectionStage ("Nível 1 recusado ($($native.Code)): $($native.Message)")
-    if($native.Code -in @(5,53,64,67,86,1219,1326)){throw "Acesso/rede recusado antes de instalar o driver: $($native.Message)"}
+    $authenticationRequired=[bool]$native.NeedsAuthentication
+    if($native.Code -in @(5,53,64,67,86,1219,1244,1326,1909,2202)){throw "Acesso/rede recusado antes de instalar o driver: $($native.Message)"}
     $currentStage='Nível 2: receber e injetar driver';Write-ConnectionStage $currentStage
     $injected=& (Join-Path $PSScriptRoot 'DRIVER-DO-SERVIDOR.ps1') -Server $Server -ShareName $ShareName -DriverName $DriverName -Action InstallDriver -ProgressPath $(if($ResultPath){$ResultPath+'.progress'}else{''})
     if(-not $injected.Success){throw "Transferência de driver falhou: $($injected.Message)"}
@@ -89,11 +90,14 @@ try{
     if($retry.Success){$result=Complete-PrinterConnection -Printer $retry.Printer -Level InjectedDriver -LocalPort $false}
     else{
      $lastNativeError=$retry.Code;Write-ConnectionStage ("Nível 2 recusado ($($retry.Code)): $($retry.Message)")
+     $authenticationRequired=[bool]$retry.NeedsAuthentication
+     if($authenticationRequired){throw "Acesso recusado após instalar o driver: $($retry.Message)"}
      $currentStage='Nível 3: criar fila local em porta UNC';Write-ConnectionStage $currentStage
      $queueName=$ShareName+' em '+$Server
      $local=& (Join-Path $PSScriptRoot 'INSTALAR-PORTA-LOCAL.ps1') -Server $Server -ShareName $ShareName -DriverName $DriverName -QueueName $queueName
      if(-not $local.Success){
       $result=$local;$result.DriverName=$DriverName
+      $result.NeedsAuthentication=($local.NativeCode -in @(5,86,1244,1326,1909,2202))
       Write-ConnectionStage ('Nível 3 recusado: '+$local.Stage+'; '+$local.Message)
      }else{
       $printer=Wait-ExactPrinter -UNCPath $UNCPath -QueueName $queueName -DriverName $DriverName -Seconds 10
@@ -107,7 +111,7 @@ try{
 }catch{
  $base=$_.Exception.GetBaseException()
  $result=@{Success=$false;QueueInstalled=$false;Stage=$currentStage;Message=$_.Exception.Message;DriverName=$DriverName;
- HResult=$base.HResult;Code=$(if($lastNativeError){$lastNativeError}else{([long]$base.HResult -band 65535)})}
+ HResult=$base.HResult;NeedsAuthentication=$authenticationRequired;Code=$(if($lastNativeError){$lastNativeError}else{([long]$base.HResult -band 65535)})}
 }
 if($injected -and $injected.RebootRequired){$result.RebootRequired=$true}
 $result.History=@($history.ToArray());$result.Cascaded=($Method -eq 'Cascade')

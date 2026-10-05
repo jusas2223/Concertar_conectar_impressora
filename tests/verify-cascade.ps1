@@ -56,8 +56,8 @@ switch($Scenario){
  inject {if(-not $result.Success -or $result.Level -ne 'InjectedDriver' -or $global:nativeCalls -ne 2 -or $global:driverCalls -ne 1){throw 'Nível 2 falhou'}}
  local {if(-not $result.Success -or $result.Level -ne 'LocalPort' -or $result.PortUNC -ne '\\SERVIDOR\Fila' -or $global:nativeCalls -ne 2 -or $global:driverCalls -ne 1){throw 'Nível 3 falhou'}}
  missing {if($result.Success -or $global:nativeCalls -ne 1 -or $global:driverCalls -ne 1 -or $global:port){throw 'Driver ausente foi aceito/repetido'}}
- access {if($result.Success -or $result.Code -ne 5 -or $global:nativeCalls -ne 1 -or $global:driverCalls){throw 'Acesso negado iniciou instalação'}}
- port-denied {if($result.Success -or $result.Stage -ne 'Criar porta local UNC' -or $global:jobCalls){throw 'Porta negada foi aceita'}}
+ access {if($result.Success -or -not $result.NeedsAuthentication -or $result.Code -ne 5 -or $global:nativeCalls -ne 1 -or $global:driverCalls){throw 'Acesso negado iniciou instalação ou perdeu a indicação de conta'}}
+ port-denied {if($result.Success -or -not $result.NeedsAuthentication -or $result.Stage -ne 'Criar porta local UNC' -or $global:jobCalls){throw 'Porta negada foi aceita ou perdeu a indicação de conta'}}
  job-error {if($result.Success -or -not $result.QueueInstalled -or $global:nativeCalls -ne 1 -or $global:driverCalls -or $global:jobCalls -ne 1){throw 'Job em erro foi aceito/reenviado'}}
  unrelated-job {if(-not $result.Success -or $result.QueueClean -or -not $result.JobValidated){throw 'Outro job alterou a validação do job de teste'}}
 }
