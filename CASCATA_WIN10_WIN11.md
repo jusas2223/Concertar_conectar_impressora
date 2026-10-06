@@ -1,4 +1,4 @@
-﻿# Conexão em cascata — versão 1.10.5
+﻿# Conexão em cascata — versão 1.10.6
 
 ## Pelo executável
 
@@ -76,7 +76,7 @@ ResultPath produz CLIXML e arquivo .progress. Sem ResultPath, retorna um objeto 
 
 ## Evidência desta entrega
 
-- A entrega 1.10.5 verifica 19 scripts, incluindo 11 cenários da cascata, 22 de autenticação, restauração com cópia anterior e preparação explícita SMB/RPC. [Comparação e evidência](REGRESSAO_1.10.5.md).
+- A entrega 1.10.5 verifica 20 scripts, incluindo 11 cenários da cascata, 22 de autenticação, restauração com cópia anterior e preparação explícita SMB/RPC. [Comparação e evidência](REGRESSAO_1.10.5.md).
 - Windows 11: transferência SMB/registro temporário de Tipo 3 e rejeição de pacote adulterado passaram; driver de teste removido.
 - Windows 11: GDI criou um job real em fila temporária pausada, retornou pendente e não anunciou impressão; job/fila removidos.
 - Recursos embutidos conferidos contra os fontes, PowerShell 5.1 e BOM verificados.
@@ -88,4 +88,4 @@ ResultPath produz CLIXML e arquivo .progress. Sem ResultPath, retorna um objeto 
 - https://learn.microsoft.com/en-us/windows/win32/printdocs/driver-info-8
 - https://learn.microsoft.com/en-us/troubleshoot/windows-client/printing/windows-11-rpc-connection-updates-for-print
 
-Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.5.
+Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.6.

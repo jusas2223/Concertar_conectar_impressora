@@ -1259,7 +1259,7 @@ function Connect-UNCPrinterSafe {
     $credential=if($script:authenticatedPrinterServer -ieq $server){$script:authenticatedPrinterCredential}else{$null}
     Write-AppLog -Message "Iniciando cascata nativa/driver/porta local para $cleanUNC." -Level INFO
     $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server -ValidationMode $ValidationMode
-    foreach($step in @($attempt.History)){Write-AppLog -Message ([string]$step) -Level INFO}
+    foreach($step in @($attempt.History)){if(-not [string]::IsNullOrWhiteSpace([string]$step)){Write-AppLog -Message ([string]$step) -Level INFO}}
     if($attempt.Cancelled){return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada; confira a fila antes de repetir.'}}
     if($attempt.TimedOut){return @{Success=$false;Code=1460;Cascaded=$true;Message=$attempt.Message}}
     if($attempt.QueueInstalled -or $attempt.Success){
@@ -1526,7 +1526,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.5]"
+$form.Text = "Arrumar Impressora VG [v1.10.6]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1679,7 +1679,10 @@ function Show-LoadingIndicator {
     )
     $lblLoadingText.Text = $Message
     $pnlLoading.Visible = $true
+    $pbLoadingMarquee.Visible = $true
+    $pbLoadingMarquee.MarqueeAnimationSpeed = 25
     $tmrSpinner.Start()
+    $form.UseWaitCursor = $true
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
 
     if ($Button -and -not $Button.IsDisposed) {
@@ -1698,7 +1701,12 @@ function Hide-LoadingIndicator {
         [string]$SuccessMessage = ""
     )
     $tmrSpinner.Stop()
+    $pbLoadingMarquee.MarqueeAnimationSpeed = 0
+    $pbLoadingMarquee.Visible = $false
     $pnlLoading.Visible = $false
+    $lblLoadingText.Text = ''
+    $btnCancelConnection.Visible = $false
+    $form.UseWaitCursor = $false
     $form.Cursor = [System.Windows.Forms.Cursors]::Default
 
     if ($Button -and -not $Button.IsDisposed) {
@@ -1779,6 +1787,7 @@ function Resolve-ComputerNameFromIpFast {
     }
     $resolvedName = Get-NetBiosNameDirect -TargetIP $clean
     if (-not $resolvedName) {
+        $asyncRes=$null
         try {
             $asyncRes = [System.Net.Dns]::BeginGetHostEntry($clean, $null, $null)
             if ($asyncRes.AsyncWaitHandle.WaitOne(200)) {
@@ -1790,14 +1799,10 @@ function Resolve-ComputerNameFromIpFast {
                     }
                 }
             }
-        } catch {}
+        } catch {} finally {if($asyncRes){$asyncRes.AsyncWaitHandle.Close()}}
     }
-    if (-not $resolvedName) {
-        try {
-            $w = Get-WmiObject Win32_OperatingSystem -ComputerName $clean -ErrorAction SilentlyContinue
-            if ($w -and $w.CSName) { $resolvedName = $w.CSName.ToUpper() }
-        } catch {}
-    }
+    # Name discovery must not start an unbounded remote WMI/RPC query.
+    # Keep the IP when NetBIOS and the bounded DNS lookup cannot identify it.
     if (-not $resolvedName) { $resolvedName = $clean }
     $script:ipHostCache[$clean] = $resolvedName.ToUpper()
     return $script:ipHostCache[$clean]
@@ -1823,15 +1828,10 @@ function Get-HostAndIpDisplay {
         $hostName = $clean.ToUpper()
         if ($KnownIp -and $KnownIp -match "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") {
             $ipAddr = $KnownIp
-        } elseif ($hostName -eq $env:COMPUTERNAME.ToUpper()) {
-            try {
-                $ips = [System.Net.Dns]::GetHostAddresses($env:COMPUTERNAME) | Where-Object { $_.AddressFamily -eq "InterNetwork" -and $_.IPAddressToString -notlike "127.*" -and $_.IPAddressToString -notlike "169.254.*" }
-                if ($ips) { $ipAddr = ($ips | Select-Object -First 1).IPAddressToString }
-            } catch {}
         } else {
             try {
-                $ips = [System.Net.Dns]::GetHostAddresses($hostName) | Where-Object { $_.AddressFamily -eq "InterNetwork" -and $_.IPAddressToString -notlike "127.*" }
-                if ($ips) { $ipAddr = ($ips | Select-Object -First 1).IPAddressToString }
+                $ips = @(Resolve-PrinterEndpointAddresses -Server $hostName -Mode IP)
+                if ($ips.Count) { $ipAddr = [string]$ips[0] }
             } catch {}
         }
     }
@@ -3143,20 +3143,28 @@ function Invoke-NetViewSafe {
 
 # Funcao Principal de Varredura Automatica de Impressoras na Rede
 function Invoke-AutoNetworkScan {
+    param([ValidateRange(1,300)][int]$TimeoutSeconds=60)
+    if($script:networkScanRunning){return}
+    $script:networkScanRunning=$true
+    $scanClock=[Diagnostics.Stopwatch]::StartNew()
+    $count=0;$timeLimitReached=$false
+    $completionMessage='A busca de impressoras não foi concluída.'
+    $completionColor=[Drawing.Color]::DarkRed;$completionTag='REDE: ERRO'
+    $lockedControls=@(@($pnlNetBottom,$pnlNetSearch,$btnToggleManual) | Where-Object {$_ -and -not $_.IsDisposed} | ForEach-Object {@{Control=$_;Enabled=$_.Enabled}})
+    try {
+    foreach($state in $lockedControls){$state.Control.Enabled=$false}
     Show-LoadingIndicator -Message "Varrendo rede local e localizando impressoras..." -Button $btnAutoScan
     $lblScanStatus.Text = "Status: Varrendo rede local e buscando impressoras ativas..."
     $lblScanStatus.ForeColor = [System.Drawing.Color]::FromArgb(0, 102, 204)
     $dgvNetPrinters.Rows.Clear()
     [System.Windows.Forms.Application]::DoEvents()
-    try {
 
     $installed = Get-InstalledPrintersWmi
-    $count = 0
     $seenUNC = @{}
 
     # 1. Impressoras compartilhadas no computador local (servidor de caixa/terminais)
     try {
-        $localShares = Get-WmiObject -Class Win32_Share -Filter "Type = 1" -ErrorAction SilentlyContinue
+        $localShares = Get-CimInstance -ClassName Win32_Share -Filter "Type = 1" -OperationTimeoutSec 4 -ErrorAction Stop
         if ($localShares) {
             foreach ($ls in $localShares) {
                 $unc = "\\$($env:COMPUTERNAME)\$($ls.Name)"
@@ -3180,11 +3188,14 @@ function Invoke-AutoNetworkScan {
     } catch {}
 
     # 2. Impressoras no Active Directory (caso em Dominio corporativo)
+    $adSearch=$null;$adResults=$null
     try {
-        $compSys = Get-WmiObject -Class Win32_ComputerSystem -ErrorAction SilentlyContinue
+        $compSys = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 4 -ErrorAction Stop
         if ($compSys -and $compSys.PartOfDomain) {
             $adSearch = [adsisearcher]"(objectCategory=printQueue)"
             $adSearch.PageSize = 50
+            $adSearch.ServerTimeLimit = [TimeSpan]::FromSeconds(6)
+            $adSearch.ClientTimeout = [TimeSpan]::FromSeconds(8)
             $adResults = $adSearch.FindAll()
             if ($adResults) {
                 foreach ($r in $adResults) {
@@ -3210,7 +3221,10 @@ function Invoke-AutoNetworkScan {
                 }
             }
         }
-    } catch {}
+    } catch {} finally {
+        if($adResults){$adResults.Dispose()}
+        if($adSearch){$adSearch.Dispose()}
+    }
 
     # 3. ARP e sondagem limitada dos enderecos da sub-rede local
     try {
@@ -3230,7 +3244,13 @@ function Invoke-AutoNetworkScan {
         $lblScanStatus.Text = "Status: Testando $($activeIps.Count) enderecos da rede local..."
         [System.Windows.Forms.Application]::DoEvents()
         $portMap = Test-OpenPrinterPorts -Addresses $activeIps
+        $checked=0
         foreach ($ip in $activeIps) {
+            if($scanClock.Elapsed.TotalSeconds -ge $TimeoutSeconds){$timeLimitReached=$true;break}
+            $checked++
+            $progress="Consultando $checked de $($activeIps.Count) endereços: $ip"
+            $lblScanStatus.Text='Status: '+$progress
+            $lblLoadingText.Text=$progress
             # Testar porta 9100 (Impressora RAW de rede direta)
             $is9100 = $portMap.ContainsKey($ip) -and $portMap[$ip].ContainsKey(9100)
 
@@ -3290,7 +3310,8 @@ function Invoke-AutoNetworkScan {
     if ($count -gt 0) {
         $lblScanStatus.Text = "Status: $count impressora(s) localizada(s) na rede. Selecione uma na lista e clique em 'Conectar Impressora Selecionada'."
         $lblScanStatus.ForeColor = [System.Drawing.Color]::FromArgb(46, 125, 50)
-        Update-StatusStrip -Text "Varredura concluida. $count impressora(s) encontrada(s) na rede." -Color "DarkGreen" -Tag "REDE: OK"
+        $completionMessage="Varredura concluída. $count impressora(s) encontrada(s) na rede."
+        $completionColor=[Drawing.Color]::DarkGreen;$completionTag='REDE: OK'
         # Selecionar a primeira linha por conveniencia
         if ($dgvNetPrinters.Rows.Count -gt 0) {
             $dgvNetPrinters.Rows[0].Selected = $true
@@ -3298,10 +3319,27 @@ function Invoke-AutoNetworkScan {
     } else {
         $lblScanStatus.Text = "Status: Nenhuma impressora compartilhada localizada automaticamente. Utilize a busca manual por servidor ou instale por IP."
         $lblScanStatus.ForeColor = [System.Drawing.Color]::DarkGoldenrod
-        Update-StatusStrip -Text "Nenhuma impressora localizada na varredura automatica." -Color "DarkGoldenrod" -Tag "REDE: AVISO"
+        $completionMessage='Nenhuma impressora localizada na varredura automática.'
+        $completionColor=[Drawing.Color]::DarkGoldenrod;$completionTag='REDE: AVISO'
     }
+    if($timeLimitReached){
+        $completionMessage="Busca encerrada no limite de $TimeoutSeconds segundos. $count impressora(s) encontrada(s); outros servidores podem ser consultados em Buscar servidor."
+        $completionColor=[Drawing.Color]::DarkGoldenrod;$completionTag='REDE: PARCIAL'
+        $lblScanStatus.Text='Status: '+$completionMessage
+        $lblScanStatus.ForeColor=$completionColor
+    }
+    } catch {
+        $completionMessage='Falha na busca de impressoras: '+$_.Exception.Message
+        $completionColor=[Drawing.Color]::DarkRed;$completionTag='REDE: ERRO'
+        $lblScanStatus.Text='Status: '+$completionMessage
+        $lblScanStatus.ForeColor=[Drawing.Color]::DarkRed
     } finally {
-        Hide-LoadingIndicator -Button $btnAutoScan
+        try{
+            foreach($state in $lockedControls){if(-not $state.Control.IsDisposed){$state.Control.Enabled=$state.Enabled}}
+            Hide-LoadingIndicator -Button $btnAutoScan
+            Update-StatusStrip -Text $completionMessage -Color $completionColor -Tag $completionTag
+            Write-AppLog -Message ($completionMessage+' Duração: '+[int]$scanClock.Elapsed.TotalSeconds+' s.') -Level $(if($completionTag -eq 'REDE: ERRO'){'ERRO'}elseif($timeLimitReached){'AVISO'}else{'INFO'})
+        }finally{$scanClock.Stop();$script:networkScanRunning=$false}
     }
 }
 

@@ -2,7 +2,7 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.5**.
+Versão atual: **1.10.6**.
 
 A conexão executa uma cascata: conexão nativa, recebimento automático de pacote INF/driver pela rede e alternativa por porta local UNC. Confirma a fila no Windows. A página de teste é opcional e acompanhada pelo JobId; um job pendente não é apresentado como falha de instalação da fila.
 
@@ -17,6 +17,8 @@ A abertura não consulta impressoras, trabalhos ou drivers. Essas listas carrega
 [Documentação completa, parâmetros, políticas e limites](CASCATA_WIN10_WIN11.md).
 
 As demais funções de diagnóstico, busca na rede, filas, instalação por IP, correções guiadas e Área de Trabalho Remota permanecem na interface WinForms. O modo Simulação impede alterações e envio de jobs pelo fluxo da interface.
+
+A busca de rede encerra o indicador, restaura os botões e preserva o resultado da varredura em sucesso, erro ou limite de tempo. Consultas de nome têm prazo e não recorrem a WMI remoto. [Correção da busca na versão 1.10.6](CORRECAO_VARREDURA_1.10.6.md).
 
 Um pacote compatível com a arquitetura/Windows do cliente é necessário. print$ pode conter apenas arquivos de um driver legado sem INF; nesse caso, o EXE do servidor precisa preparar o pacote aplicável. A porta UNC continua sujeita à validação do Windows. A versão não garante compatibilidade com qualquer driver/build, e a conexão MP no Windows 10 ainda aguarda confirmação real.
 
@@ -51,4 +53,4 @@ Os testes cobrem sintaxe, conteúdo incorporado ao EXE, descoberta, autenticaç�
 
 Esta edição não inclui dados de atendimento, logs, drivers de fabricantes nem arquivos da máquina virtual de testes.
 
-Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.5.
+Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.6.

@@ -1,4 +1,4 @@
-﻿# Autenticação sob demanda — versão 1.10.5
+﻿# Autenticação sob demanda — versão 1.10.6
 
 ## Como usar
 
@@ -24,7 +24,7 @@ Um código 709 ou 87 isolado não comprova senha ausente. Pacote inexistente, se
 
 ## Verificação da entrega
 
-19 scripts de verificação passaram em Windows PowerShell 5.1, incluindo 22 cenários de autenticação e 11 cenários de cascata. Cobrem recusa de leitura do driver após 709, substituição de credencial recusada, senha rejeitada, cancelamento, ausência de pacote, erro local, conta alternativa após 709 com compartilhamento confirmado, erro 87, job em erro e limite de repetição.
+20 scripts de verificação passaram em Windows PowerShell 5.1, incluindo 22 cenários de autenticação e 11 cenários de cascata. Cobrem recusa de leitura do driver após 709, substituição de credencial recusada, senha rejeitada, cancelamento, ausência de pacote, erro local, conta alternativa após 709 com compartilhamento confirmado, erro 87, job em erro e limite de repetição.
 
 O worker real de sessão/leitura foi executado no host, sem alterar conta, driver ou fila. Esse host permitiu a leitura também na tentativa com identidade alternativa; portanto esse teste não comprova rejeição real de senha em outro servidor. As recusas de acesso foram verificadas com fixtures controladas.
 

@@ -4,7 +4,7 @@ $t=$null;$e=$null;$ast=[Management.Automation.Language.Parser]::ParseFile($path,
 if($e.Count){throw $e[0].Message}
 $fn=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Connect-UNCPrinterSafe'},$true)|Select-Object -First 1
 . ([scriptblock]::Create($fn.Extent.Text))
-function Write-AppLog {param($Message,$Level)}
+function Write-AppLog {param([Parameter(Mandatory=$true)][string]$Message,$Level)}
 function Test-TcpPortSafe {param($HostOrIp,$Port,$TimeoutMs) return $true}
 function Get-InstalledPrintersWmi {return @()}
 function Test-PrinterShareInstalled {param($UNCPath,$InstalledPrinters) return $script:registered}
