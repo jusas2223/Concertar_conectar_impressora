@@ -2,7 +2,9 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.6**.
+Versão atual: **1.10.7**.
+
+Corrigida a recuperação quando a conexão retorna 709 e a porta UNC é negada, com consulta remota inconclusiva. O app verifica o compartilhamento antes de oferecer outra conta; preserva recusas locais, mantém os erros originais e distingue consulta de driver falhada de ausência comprovada. [Correção de acesso, testes e limites da 1.10.7](CORRECAO_ACESSO_1.10.7.md).
 
 A conexão executa uma cascata: conexão nativa, recebimento automático de pacote INF/driver pela rede e alternativa por porta local UNC. Confirma a fila no Windows. A página de teste é opcional e acompanhada pelo JobId; um job pendente não é apresentado como falha de instalação da fila.
 

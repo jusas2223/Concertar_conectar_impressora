@@ -28,6 +28,10 @@ function Find-RemoteInfPackage {
  Set-DriverStage 'Ler manifesto remoto do driver' -Scope Remote -Resource '\\SERVIDOR\print$\x64\manifest.json'
  if($global:scenario -eq 'read-denied'){throw [UnauthorizedAccessException]::new('Read denied fixture')}
  if($global:scenario -eq 'missing'){return $null}
+ if($global:scenario -eq 'rpc-invalid'){
+  Set-DriverStage 'Consultar driver da fila remota' -Scope Remote -Resource '\\SERVIDOR\Fila'
+  throw [ComponentModel.Win32Exception]::new(1801)
+ }
  return @{Source='\\SERVIDOR\print$\x64\pacote';InfName='modelo.inf';DriverName='Modelo fixture';Hashes=@()}
 }
 function Copy-ExactDriverDirectory {
@@ -47,10 +51,11 @@ if($r.Success){throw 'Falha anunciada como sucesso'}
 switch($Scenario){
  read-denied {if($r.Code -ne 5 -or -not $r.NeedsAuthentication -or $r.Resource -notlike '\\SERVIDOR\print$*' -or $r.Stage -ne 'Ler manifesto remoto do driver'){throw 'Falha remota mascarada como pacote ausente'}}
  local-denied {if($r.Code -ne 5 -or $r.NeedsAuthentication -or $r.FailureScope -ne 'Local' -or $r.Stage -ne 'Criar pasta temporária do pacote'){throw 'Falha local pediu senha de rede'}}
- missing {if($r.NeedsAuthentication -or $r.Message -notlike '*Não há pacote*'){throw 'Pacote ausente pediu senha'}}
+ missing {if($r.NeedsAuthentication -or $r.Code -ne 2 -or $r.PreparedPackageFound -ne $false -or $r.DriverAvailability -ne 'Unknown'){throw 'Pacote ausente pediu senha ou anunciou ausência comprovada do driver'}}
+ rpc-invalid {if($r.Success -or $r.DriverQueryCode -ne 1801 -or $r.InfLookupStage -ne 'Consultar driver da fila remota' -or $r.PreparedPackageFound -ne $false -or $r.DriverAvailability -ne 'Unknown' -or $r.Message -notlike '*1801*'){throw 'Consulta RPC recusada perdeu a causa ou foi tratada como driver ausente'}}
 }
 '@,$utf8)
- foreach($scenario in @('read-denied','local-denied','missing')){
+ foreach($scenario in @('read-denied','local-denied','missing','rpc-invalid')){
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $temp 'run.ps1') -Scenario $scenario
   if($LASTEXITCODE){throw "Worker driver falhou em $scenario"}
  }

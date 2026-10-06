@@ -10,6 +10,7 @@ $ErrorActionPreference='Stop'
 $result=@{Success=$false;QueueInstalled=$false;Message='A conexão não foi concluída.'}
 $injected=$null
 $history=New-Object Collections.ArrayList
+$nativeAttemptCodes=New-Object Collections.ArrayList
 $currentStage='Validar endereço'; $lastNativeError=0; $authenticationRequired=$false
 function Write-ConnectionStage {
  param([string]$Text)
@@ -77,6 +78,7 @@ try{
    # Compatibility changes remain explicit in PrepareClient/PrepareHost.
    $currentStage='Nível 1: conexão nativa';Write-ConnectionStage $currentStage
    $native=Try-NativePrinterConnection -Path $UNCPath
+   [void]$nativeAttemptCodes.Add($(if($native.Success){0}else{$native.Code}))
    if($native.Success){$result=Complete-PrinterConnection -Printer $native.Printer -Level Native -LocalPort $false}
    else{
     $lastNativeError=$native.Code;Write-ConnectionStage ("Nível 1 recusado ($($native.Code)): $($native.Message)")
@@ -91,6 +93,7 @@ try{
     if($injected.RebootRequired){Write-ConnectionStage 'PnPUtil indicou reinicialização necessária; o PC não foi reiniciado automaticamente.'}
     $currentStage='Nível 2: repetir conexão nativa uma vez';Write-ConnectionStage $currentStage
     $retry=Try-NativePrinterConnection -Path $UNCPath
+    [void]$nativeAttemptCodes.Add($(if($retry.Success){0}else{$retry.Code}))
     if($retry.Success){$result=Complete-PrinterConnection -Printer $retry.Printer -Level InjectedDriver -LocalPort $false}
     else{
      $lastNativeError=$retry.Code;Write-ConnectionStage ("Nível 2 recusado ($($retry.Code)): $($retry.Message)")
@@ -98,7 +101,7 @@ try{
      if($authenticationRequired){$result=$retry;throw "Acesso recusado após instalar o driver: $($retry.Message)"}
      $currentStage='Nível 3: criar fila local em porta UNC';Write-ConnectionStage $currentStage
      $queueName=$ShareName+' em '+$Server
-     $local=& (Join-Path $PSScriptRoot 'INSTALAR-PORTA-LOCAL.ps1') -Server $Server -ShareName $ShareName -DriverName $DriverName -QueueName $queueName
+     $local=& (Join-Path $PSScriptRoot 'INSTALAR-PORTA-LOCAL.ps1') -Server $Server -ShareName $ShareName -DriverName $DriverName -QueueName $queueName -HasNetworkCredential:$HasNetworkCredential
      if(-not $local.Success){
       $result=$local;$result.DriverName=$DriverName
       Write-ConnectionStage ('Nível 3 recusado: '+$local.Stage+'; '+$local.Message)
@@ -119,20 +122,18 @@ try{
  $result.DriverName=$DriverName
 }
 if($injected -and $injected.RebootRequired){$result.RebootRequired=$true}
-if($Method -eq 'Cascade' -and -not $result.Success -and -not $result.QueueInstalled -and
-   -not $HasNetworkCredential -and -not $result.NeedsAuthentication -and $lastNativeError -in @(1801,283,3019) -and
-   -not($result.FailureScope -eq 'Local' -and $result.Code -eq 5)){
- try{
-  $shareCode=Test-PrinterSharedQueueExists -Server $Server -ShareName $ShareName
-  $result.ShareLookupCode=$shareCode
-  if($shareCode -eq 0){$result.CredentialRetryRecommended=$true;$result.NativeConnectionCode=$lastNativeError;$result.ConfirmedUNC=$UNCPath}
-  elseif($shareCode -in @(5,86,1244,1326,1385,1909)){
-   $result.PreviousFailureCode=$result.Code;$result.NeedsAuthentication=$true;$result.Resource=$UNCPath;$result.FailureScope='Remote'
-   $result.Code=$shareCode;$result.NativeCode=$shareCode;$result.Stage='Confirmar fila compartilhada'
-   $result.Message='O servidor recusou a consulta ao compartilhamento. Erro anterior da instalação: '+$result.Message
+if($Method -eq 'Cascade'){
+ $result=Resolve-PrinterCredentialRecovery -Failure $result -Server $Server -ShareName $ShareName -NativeConnectionCode $lastNativeError -HasNetworkCredential:$HasNetworkCredential
+ $result.NativeAttemptCodes=@($nativeAttemptCodes.ToArray())
+ if($lastNativeError){$result.NativeConnectionCode=$lastNativeError}
+ $result.DriverConfirmed=[bool]($injected -and $injected.Success)
+ if($injected){
+  foreach($field in @('DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','InfLookupResource','PreparedPackageFound')){
+   if($injected.ContainsKey($field)){$result[$field]=$injected[$field]}
   }
- }catch{Write-ConnectionStage ('Não foi possível confirmar o compartilhamento para oferecer outra conta: '+$_.Exception.Message)}
+ }
 }
+$result.WorkerVersion='1.10.7';$result.AttemptId=[Guid]::NewGuid().ToString('N')
 $result.History=@($history.ToArray());$result.Cascaded=($Method -eq 'Cascade')
 if(-not $ResultPath){return $result}
 try{$result | Export-Clixml -LiteralPath $ResultPath -Force -ErrorAction Stop}catch{exit 2}

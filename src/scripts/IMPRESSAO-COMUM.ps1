@@ -1,7 +1,7 @@
 ﻿# Shared by the bounded workers. No UI and no credentials on disk.
 function Get-PrinterOperationFailure {
     param([Management.Automation.ErrorRecord]$Record,[string]$Stage,[string]$Resource='',
-        [ValidateSet('Remote','Local')][string]$Scope='Local')
+        [ValidateSet('Remote','Local','Unknown')][string]$Scope='Local')
     $exception=$Record.Exception.GetBaseException()
     $code=0
     if($exception -is [ComponentModel.Win32Exception]){$code=$exception.NativeErrorCode}
@@ -62,6 +62,51 @@ function Test-PrinterSharedQueueExists {
     param([string]$Server,[string]$ShareName)
     Initialize-PrinterRemoteAccessApi
     return [PrinterRemoteAccess]::PrintShare($Server,$ShareName)
+}
+function Resolve-PrinterCredentialRecovery {
+    param([System.Collections.IDictionary]$Failure,[string]$Server,[string]$ShareName,
+        [int]$NativeConnectionCode=0,[switch]$HasNetworkCredential)
+    if($Failure.Success -or $Failure.QueueInstalled -or $Failure.Cancelled -or $Failure.TimedOut){return $Failure}
+    if($Failure.NeedsAuthentication){$Failure.RecoveryReason='RemoteAccessRefused';return $Failure}
+    if($Failure.CredentialRetryRecommended){return $Failure}
+    if($Failure.Contains('ShareLookupCode') -or $Failure.Contains('ShareLookupMessage')){return $Failure}
+    $portDenied=$Failure.Code -eq 5 -and $Failure.Stage -in @('Criar porta local UNC','Validar e criar porta UNC no monitor local do Windows')
+    $hasQueueProbe=$Failure.Contains('RemoteAccessCode')
+    if($portDenied -and $hasQueueProbe -and $Failure.RemoteAccessCode -eq 0){
+        $Failure.RecoveryReason='LocalPortDeniedRemoteQueueAccessible'
+        return $Failure
+    }
+    if($Failure.FailureScope -eq 'Local' -and $Failure.Code -eq 5 -and -not $portDenied){
+        $Failure.RecoveryReason='LocalOperationDenied'
+        return $Failure
+    }
+    $ambiguousPort=$portDenied -and (($hasQueueProbe -and $Failure.RemoteAccessCode -in @(1801,283,3019)) -or
+        (-not $hasQueueProbe -and $Failure.FailureScope -eq 'Unknown'))
+    if(($portDenied -and -not $ambiguousPort) -or
+        (-not $ambiguousPort -and $NativeConnectionCode -notin @(1801,283,3019))){return $Failure}
+    if($HasNetworkCredential){$Failure.RecoveryReason='NetworkCredentialAlreadySupplied';return $Failure}
+    try{
+        $shareCode=Test-PrinterSharedQueueExists -Server $Server -ShareName $ShareName
+        $Failure.ShareLookupCode=$shareCode
+        if($shareCode -eq 0){
+            $Failure.CredentialRetryRecommended=$true
+            $Failure.RecoveryReason='PrintShareConfirmedRemoteAccessUnverified'
+            $Failure.ConfirmedUNC='\\'+$Server+'\'+$ShareName
+            if($NativeConnectionCode){$Failure.NativeConnectionCode=$NativeConnectionCode}
+            if($portDenied){$Failure.FailureScope='Unknown'}
+        }elseif($shareCode -in @(5,86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202)){
+            # Keep the installation code/stage; this is a separate access probe.
+            $Failure.NeedsAuthentication=$true;$Failure.AuthenticationCode=$shareCode
+            $Failure.RecoveryReason='PrintShareLookupRefused';$Failure.FailureScope='Remote'
+        }elseif($shareCode -in @(67,2310)){
+            $Failure.RecoveryReason='PrintShareNotFound'
+            $Failure.Message+=' O compartilhamento de impressão informado não foi encontrado. Confira o nome de compartilhamento no computador servidor.'
+        }else{$Failure.RecoveryReason='PrintShareLookupInconclusive'}
+    }catch{
+        $Failure.ShareLookupMessage=$_.Exception.Message
+        $Failure.RecoveryReason='PrintShareLookupFailed'
+    }
+    return $Failure
 }
 function Test-PrinterDriverResourceAccess {
     param([string]$Resource)

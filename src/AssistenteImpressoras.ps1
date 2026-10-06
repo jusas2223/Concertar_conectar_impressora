@@ -115,7 +115,8 @@ function Write-AppLog {
 
 # Inicializar cabeçalho do arquivo de log
 Write-AppLog -Message "================================================================================" -Level "INFO"
-Write-AppLog -Message "Início de Atendimento - Arrumar Impressora VG" -Level "INFO"
+Write-AppLog -Message "Início de Atendimento - Assistente de Impressoras (Suporte Técnico)" -Level "INFO"
+Write-AppLog -Message "Versão do app: 1.10.7 | PowerShell: $($PSVersionTable.PSVersion) | Processo: $([IntPtr]::Size * 8) bits" -Level "INFO"
 Write-AppLog -Message "Computador: $env:COMPUTERNAME | Usuário: $env:USERNAME | Data: $((Get-Date).ToString())" -Level "INFO"
 Write-AppLog -Message "Arquivo de Log: $global:LogFilePath" -Level "INFO"
 Write-AppLog -Message "================================================================================" -Level "INFO"
@@ -764,7 +765,9 @@ function Invoke-LocalPortInstallElevated {
     $resultPath = Join-Path $env:TEMP ('PrinterLocalPort_' + [Guid]::NewGuid().ToString('N') + '.result.xml')
     $process = $null
     try {
-        @{ UNCPath=$UNCPath; DriverName=$DriverName; QueueName=$QueueName; InfPath=$InfPath } |
+        $portServer = ([regex]::Match($UNCPath,'^\\\\([^\\]+)\\')).Groups[1].Value
+        $hasNetworkCredential=[bool]($script:authenticatedPrinterServer -ieq $portServer -and $script:authenticatedPrinterCredential)
+        @{ UNCPath=$UNCPath; DriverName=$DriverName; QueueName=$QueueName; InfPath=$InfPath; HasNetworkCredential=$hasNetworkCredential } |
             Export-Clixml -LiteralPath $requestPath -Force -ErrorAction Stop
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -RequestPath "{1}" -ResultPath "{2}"' -f $LocalPortInstallPath,$requestPath,$resultPath
         Write-AppLog -Message "Instalando fila local '$QueueName' na porta $UNCPath com o driver '$DriverName'." -Level 'INFO'
@@ -816,6 +819,11 @@ function Invoke-LocalPortInstallElevated {
         }
         $detail = "Etapa: $($result.Stage)`nErro: $($result.Message)`nCódigo: $($result.HResult)`nIdentificador: $($result.ErrorId)`nMétodo da porta: $($result.PortMethod)`nCódigo nativo: $($result.NativeCode)`nErro CIM anterior: $($result.CimPortError)"
         Write-AppLog -Message ("Instalação por porta local falhou: " + ($detail -replace "`r?`n", ' | ')) -Level 'AVISO'
+        $diagnostic=@("Destino=$UNCPath")
+        foreach($field in @('AttemptId','WorkerVersion','FailureScope','RemoteAccessCode','ShareLookupCode','RecoveryReason','CredentialRetryRecommended','NeedsAuthentication')){
+            if($result.ContainsKey($field)){$diagnostic+=($field+'='+(([string]$result[$field]) -replace '[\r\n]',' '))}
+        }
+        Write-AppLog -Message ('Decisão de recuperação da porta local: '+($diagnostic -join ' | ')) -Level INFO
         $result.Message=$detail
         return $result
     } catch {
@@ -884,7 +892,7 @@ function Show-LocalPortFallbackDialog {
     $lblDriver = [System.Windows.Forms.Label]::new()
     $lblDriver.Location = [System.Drawing.Point]::new(16, 202)
     $lblDriver.AutoSize = $true
-    $lblDriver.Text = 'Driver para Windows 10 (nome exato do modelo):'
+    $lblDriver.Text = 'Driver para este computador (nome exato do modelo):'
     $dialog.Controls.Add($lblDriver)
     $cmbDriver = [System.Windows.Forms.ComboBox]::new()
     $cmbDriver.Location = [System.Drawing.Point]::new(16, 223)
@@ -1260,6 +1268,12 @@ function Connect-UNCPrinterSafe {
     Write-AppLog -Message "Iniciando cascata nativa/driver/porta local para $cleanUNC." -Level INFO
     $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server -ValidationMode $ValidationMode
     foreach($step in @($attempt.History)){if(-not [string]::IsNullOrWhiteSpace([string]$step)){Write-AppLog -Message ([string]$step) -Level INFO}}
+    $diagnostic=@("Destino=$cleanUNC")
+    foreach($field in @('AttemptId','WorkerVersion','Success','QueueInstalled','Stage','Code','NativeCode','FailureScope','NativeConnectionCode','RemoteAccessCode','ShareLookupCode','AuthenticationCode','RecoveryReason','CredentialRetryRecommended','NeedsAuthentication','DriverName','DriverConfirmed','DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','PreparedPackageFound','PortMethod')){
+        if($attempt.ContainsKey($field)){$diagnostic+=($field+'='+(([string]$attempt[$field]) -replace '[\r\n]',' '))}
+    }
+    if($attempt.ContainsKey('NativeAttemptCodes')){$diagnostic+=('NativeAttemptCodes='+(@($attempt.NativeAttemptCodes) -join ','))}
+    Write-AppLog -Message ('Resultado da conexão: '+($diagnostic -join ' | ')) -Level INFO
     if($attempt.Cancelled){return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada; confira a fila antes de repetir.'}}
     if($attempt.TimedOut){return @{Success=$false;Code=1460;Cascaded=$true;Message=$attempt.Message}}
     if($attempt.QueueInstalled -or $attempt.Success){
@@ -1526,7 +1540,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.6]"
+$form.Text = "Arrumar Impressora VG [v1.10.7]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1939,7 +1953,7 @@ function Invoke-PrinterOperationUsingAvailableSession {
     $needsAccount = $result.NeedsAuthentication -or $result.CredentialRetryRecommended -or
         ($result.FailureScope -ne 'Local' -and $result.Code -in @(86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202))
     if (-not $needsAccount) { return $result }
-    Write-AppLog -Message "Acesso recusado em $server; etapa '$($result.Stage)', recurso '$($result.Resource)', código $($result.Code). Solicitando uma conta uma vez." -Level AVISO
+    Write-AppLog -Message "Recuperação de acesso em $server; etapa '$($result.Stage)', recurso '$($result.Resource)', código $($result.Code), motivo '$($result.RecoveryReason)'. Solicitando uma conta uma vez." -Level AVISO
     $choice = & $RequestCredential $server $result
     if (-not $choice -or $choice.Cancelled) {
         return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada na solicitação de conta.'}
@@ -2422,7 +2436,9 @@ $btnPublishDriver.Add_Click({
         if (-not $printer.Shared -or $printer.Name -like '\\*') { throw 'Selecione uma impressora local compartilhada neste PC.' }
         $script:cancelPrinterConnection = $false
         Show-LoadingIndicator -Message 'Preparando o driver para os outros computadores...' -Button $btnPublishDriver
-        $published = Invoke-BoundedPrinterAttempt -UNCPath ('\\' + $env:COMPUTERNAME + '\' + $printer.ShareName) -Method PrepareHost -TimeoutSeconds 120
+        $preparedUNC='\\' + $env:COMPUTERNAME + '\' + $printer.ShareName
+        Write-AppLog -Message "Preparar host e driver: destino $preparedUNC; fila local '$($printer.Name)'; driver '$($printer.DriverName)'." -Level INFO
+        $published = Invoke-BoundedPrinterAttempt -UNCPath $preparedUNC -Method PrepareHost -TimeoutSeconds 120
         Write-AppLog -Message "Preparar driver: $($published.Message)" -Level $(if ($published.Success) { 'SUCESSO' } else { 'ERRO' })
         [System.Windows.Forms.MessageBox]::Show($form, $published.Message, 'Driver do servidor') | Out-Null
     } catch {
@@ -3453,7 +3469,7 @@ $btnFix70911b.Add_Click({
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $PrinterFixPath + '" -ErrorCode ' + $errorCode + ' -OutputDirectory "' + $outputPath + '" -PrinterServer "' + $server + '"'
         $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru -ErrorAction Stop
         $exitCode = Wait-PrinterRepairProcess -Process $process -ErrorCode $errorCode
-        $result = if ($exitCode -eq 0) { 'Ajustes locais aplicados e confirmados.' } elseif ($exitCode -eq 10) { 'Ajustes locais aplicados; há verificações pendentes.' } else { "Correção não concluída (código $exitCode)." }
+        $result = if ($exitCode -eq 0) { 'Configuração local aplicada; a conexão com a impressora ainda precisa ser validada.' } elseif ($exitCode -eq 10) { 'Configuração local aplicada; há verificações pendentes.' } else { "Correção não concluída (código $exitCode)." }
         $notes = @()
         if ([IO.File]::Exists($reportPath)) {
             $notes = @(Get-Content -LiteralPath $reportPath | Where-Object { $_ -like 'AVISO:*' })
@@ -3607,7 +3623,7 @@ $btnFixNetwork24H2.Add_Click({
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $NetworkFixPath + '" -Role ' + $repairRole + ' -OutputDirectory "' + $outputPath + '"'
         $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
         $exitCode = $process.ExitCode
-        $resultText = if ($exitCode -eq 0) { 'Correção confirmada pelo Windows.' } else { "Correção não concluída (código $exitCode)." }
+        $resultText = if ($exitCode -eq 0) { 'Configuração SMB aplicada; a conexão com a impressora ainda precisa ser validada.' } else { "Correção não concluída (código $exitCode)." }
         $level = if ($exitCode -eq 0) { 'SUCESSO' } else { 'AVISO' }
         $color = if ($exitCode -eq 0) { 'DarkGreen' } else { 'DarkRed' }
         Write-AppLog -Message "$resultText Relatório: $reportPath" -Level $level

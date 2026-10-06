@@ -5,7 +5,8 @@
     [string]$ShareName = '',
     [string]$DriverName = '',
     [string]$QueueName = '',
-    [string]$InfPath = ''
+    [string]$InfPath = '',
+    [switch]$HasNetworkCredential
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +66,7 @@ try {
         $request = Import-Clixml -LiteralPath $RequestPath -ErrorAction Stop
         $address=Resolve-PrinterUNC -UNCPath ([string]$request.UNCPath)
         $DriverName=[string]$request.DriverName; $QueueName=[string]$request.QueueName; $InfPath=[string]$request.InfPath
+        $HasNetworkCredential=[bool]$request.HasNetworkCredential
     }else{$address=Resolve-PrinterUNC -Server $Server -ShareName $ShareName}
     $unc=$address.UNCPath
     $driver=$DriverName.Trim()
@@ -73,14 +75,14 @@ try {
     $inf=$InfPath
 
     if ($unc -notmatch '^\\\\[^\\]+\\[^\\]+$') { throw 'Caminho da impressora inválido. Use \\SERVIDOR\Fila.' }
-    if (-not $driver) { throw 'Informe o nome exato do driver para o Windows 10.' }
+    if (-not $driver) { throw 'Informe o nome exato do driver para este computador.' }
     if (-not $queue -or $queue.Length -gt 200 -or $queue -match '[\\/]') {
         throw 'Nome da fila local inválido.'
     }
     if ($inf) {
         $inf = [IO.Path]::GetFullPath($inf)
         if ([IO.Path]::GetExtension($inf) -ine '.inf' -or -not (Test-Path -LiteralPath $inf -PathType Leaf)) {
-            throw 'Selecione um arquivo INF existente do driver para Windows 10.'
+            throw 'Selecione um arquivo INF existente do driver para este Windows.'
         }
     }
 
@@ -102,7 +104,7 @@ try {
             $installedDriver = Get-PrinterDriver -Name $driver -ErrorAction SilentlyContinue
         }
         if (-not $installedDriver) {
-            throw "O driver '$driver' não está instalado neste PC. Selecione o INF oficial para Windows 10 ou instale o driver e tente novamente."
+            throw "O driver '$driver' não está instalado neste PC. Receba o pacote preparado no servidor ou selecione um INF compatível com este Windows."
         }
 
         $createdPort = $false
@@ -150,11 +152,14 @@ try {
             $result.RemoteAccessCode=$remoteCode
             if($remoteCode -in @(5,86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202)){
                 $result.NeedsAuthentication=$true;$result.FailureScope='Remote'
-            }
-        }catch{$result.RemoteAccessProbeMessage=$_.Exception.Message}
+            }elseif($remoteCode -ne 0){$result.FailureScope='Unknown'}
+        }catch{$result.RemoteAccessProbeMessage=$_.Exception.Message;$result.FailureScope='Unknown'}
     }
     $result.PortMethod=$portMethod;$result.CimPortError=$cimPortError
+    if($address){$result=Resolve-PrinterCredentialRecovery -Failure $result -Server $address.Server -ShareName $address.ShareName -HasNetworkCredential:$HasNetworkCredential}
 }
+$result.QueueInstalled=[bool]$result.Success
+$result.WorkerVersion='1.10.7';$result.AttemptId=[Guid]::NewGuid().ToString('N')
 
 if(-not $ResultPath){return $result}
 try {

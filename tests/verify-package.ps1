@@ -17,7 +17,7 @@ $scripts = @(
 
 if (-not (Test-Path -LiteralPath $exePath)) { throw 'Compile o EXE antes deste teste.' }
 $assembly = [Reflection.Assembly]::LoadFile($exePath)
-if ($assembly.GetName().Version.ToString() -ne '1.10.6.0') { throw 'Versao do EXE incorreta.' }
+if ($assembly.GetName().Version.ToString() -ne '1.10.7.0') { throw 'Versao do EXE incorreta.' }
 $launcherType = $assembly.GetType('AssistenteImpressorasLauncher.Program', $true)
 $quoteMethod = $launcherType.GetMethod('Quote', [Reflection.BindingFlags]'NonPublic,Static')
 if (-not $quoteMethod -or $quoteMethod.Invoke($null, @('T:\')) -cne '"T:\\"') {

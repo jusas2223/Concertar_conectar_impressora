@@ -14,6 +14,8 @@ $ErrorActionPreference = 'Stop'
 $stage = $null
 $archive = $null
 $policy = $null
+$infError = $null
+$preparedPackageFound = $null
 $script:driverOperationStage='Preparar transferência'
 $script:driverOperationScope='Local'
 $script:driverOperationResource=''
@@ -294,10 +296,14 @@ try {
             }
             Set-DriverStage 'Injetar INF com PnPUtil e confirmar o nome do driver'
             # Select only the mapped INF, not other drivers that share a spool folder.
-            return (Invoke-PrinterPnPInstall -Directory $infStage -DriverName $remote.DriverName -InfName $remote.InfName)
+            $installed=Invoke-PrinterPnPInstall -Directory $infStage -DriverName $remote.DriverName -InfName $remote.InfName
+            $installed.PreparedPackageFound=$true
+            $installed.DriverAvailability=$(if($installed.Success){'Confirmed'}else{'Unknown'})
+            return $installed
         }
     } catch {
         $infError=Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $script:driverOperationResource -Scope $script:driverOperationScope
+        $infError.DriverAvailability='Unknown';$infError.PreparedPackageFound=$null
         if($infError.NeedsAuthentication -or $script:driverOperationScope -eq 'Local'){return $infError}
         $infFailure=$_.Exception.Message
     }
@@ -309,7 +315,19 @@ try {
     Set-DriverStage 'Localizar pacote do compartilhamento no servidor'
     $packagePath = '\\' + $server + '\print$\AssistentePacotes\' + $key
     Set-DriverStage 'Ler pacote legado remoto' -Scope Remote -Resource $packagePath
-    if (-not (Test-PrinterRemotePath -Path $packagePath)) { throw "Não há pacote completo disponível para esta fila. INF remoto: $infFailure. No servidor $server, prepare o driver pelo EXE para publicar o pacote legado quando aplicável." }
+    $preparedPackageFound=Test-PrinterRemotePath -Path $packagePath
+    if (-not $preparedPackageFound) {
+        $message="Não foi possível obter o pacote de driver desta fila. O pacote preparado não foi encontrado em print$. No computador $server, selecione a fila e use Preparar host e driver."
+        if($infError){$message="Não foi possível consultar/obter o driver remoto (código $($infError.Code)). O pacote preparado também não foi encontrado em print$. No computador $server, selecione a fila e use Preparar host e driver."}
+        $failure=@{Success=$false;Code=2;NativeCode=2;Stage=$script:driverOperationStage;Resource=$packagePath;
+            FailureScope='Remote';NeedsAuthentication=$false;DriverAvailability='Unknown';PreparedPackageFound=$false;Message=$message}
+        if($infError){
+            $failure.InfLookupCode=$infError.Code;$failure.InfLookupStage=$infError.Stage
+            $failure.InfLookupResource=$infError.Resource;$failure.InfLookupMessage=$infFailure
+            if($infError.Stage -eq 'Consultar driver da fila remota'){$failure.DriverQueryCode=$infError.Code}
+        }
+        return $failure
+    }
     if ((Get-Item -LiteralPath $packagePath).Length -gt 67108864) { throw 'Pacote maior que 64 MB.' }
     $localZip = Join-Path $stage 'package.zip'
     Set-DriverStage 'Copiar pacote pela rede'
@@ -379,16 +397,23 @@ try {
             $local=@($localPaths | Where-Object { $_ -and [IO.Path]::GetFileName($_) -ieq $vendor.Name }) | Select-Object -First 1
             if(-not $local -or -not(Test-Path -LiteralPath $local -PathType Leaf) -or (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash -ine $vendor.SHA256){$equal=$false;break}
         }
-        if($equal){return @{Success=$true;DriverName=$driverName;Existing=$true;FilesCompared=$true;Message="Driver '$driverName' confirmado por arquitetura e hashes dos arquivos do fabricante."}}
+        if($equal){return @{Success=$true;DriverName=$driverName;Existing=$true;FilesCompared=$true;PreparedPackageFound=$true;DriverAvailability='Confirmed';Message="Driver '$driverName' confirmado por arquitetura e hashes dos arquivos do fabricante."}}
     }
     Set-DriverStage 'Registrar driver no Windows deste PC'
     if(-not('PrinterDriverTransfer' -as [type])){Add-Type -TypeDefinition $native -ErrorAction Stop}
     [PrinterDriverTransfer]::Install($driverName,$environment,$resolved[$manifest.Driver],$resolved[$manifest.Data],$resolved[$manifest.Config],$(if ($manifest.Help) { $resolved[$manifest.Help] } else { '' }),[string[]]$dependencies,[string]$manifest.DataType)
     $confirmed = Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $driverName -and $_.PrinterEnvironment -ieq $environment }
     if (-not $confirmed) { throw 'O Windows não confirmou a instalação do driver.' }
-    return @{ Success=$true; DriverName=$driverName; Message="Driver '$driverName' recebido de $server e instalado neste PC." }
+    return @{ Success=$true; DriverName=$driverName;PreparedPackageFound=$true;DriverAvailability='Confirmed'; Message="Driver '$driverName' recebido de $server e instalado neste PC." }
 } catch {
-    return (Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $script:driverOperationResource -Scope $script:driverOperationScope)
+    $failure=Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $script:driverOperationResource -Scope $script:driverOperationScope
+    $failure.DriverAvailability='Unknown';$failure.PreparedPackageFound=$preparedPackageFound
+    if($infError){
+        $failure.InfLookupCode=$infError.Code;$failure.InfLookupStage=$infError.Stage
+        $failure.InfLookupResource=$infError.Resource;$failure.InfLookupMessage=$infFailure
+        if($infError.Stage -eq 'Consultar driver da fila remota'){$failure.DriverQueryCode=$infError.Code}
+    }
+    return $failure
 } finally {
     if ($archive) { $archive.Dispose() }
     if ($stage -and $stage.StartsWith((Join-Path $env:TEMP 'PrinterDriverTransfer_'),[StringComparison]::OrdinalIgnoreCase)) {
