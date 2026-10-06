@@ -17,7 +17,10 @@ $scripts = @(
 
 if (-not (Test-Path -LiteralPath $exePath)) { throw 'Compile o EXE antes deste teste.' }
 $assembly = [Reflection.Assembly]::LoadFile($exePath)
-if ($assembly.GetName().Version.ToString() -ne '1.10.8.0') { throw 'Versao do EXE incorreta.' }
+if ($assembly.GetName().Version.ToString() -ne '1.10.9.0') { throw 'Versao do EXE incorreta.' }
+$mainSource=[IO.File]::ReadAllText($scripts[0].Path)
+$logVersion=[regex]::Match($mainSource,'Versão do app: ([0-9.]+) \|')
+if(-not $logVersion.Success -or $logVersion.Groups[1].Value -ne $assembly.GetName().Version.ToString(3)){throw 'Versão do cabeçalho do log diverge do EXE.'}
 $launcherType = $assembly.GetType('AssistenteImpressorasLauncher.Program', $true)
 $quoteMethod = $launcherType.GetMethod('Quote', [Reflection.BindingFlags]'NonPublic,Static')
 if (-not $quoteMethod -or $quoteMethod.Invoke($null, @('T:\')) -cne '"T:\\"') {

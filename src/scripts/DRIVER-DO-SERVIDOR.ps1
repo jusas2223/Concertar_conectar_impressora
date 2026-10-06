@@ -16,6 +16,7 @@ $archive = $null
 $policy = $null
 $infError = $null
 $preparedPackageFound = $null
+$legacyRegistration = $null
 $script:driverOperationStage='Preparar transferência'
 $script:driverOperationScope='Local'
 $script:driverOperationResource=''
@@ -92,7 +93,10 @@ public static class PrinterDriverTransfer {
   Func<string,IntPtr> str=s=>{ if(String.IsNullOrEmpty(s)) return IntPtr.Zero; var p=Marshal.StringToHGlobalUni(s); allocated.Add(p); return p; };
   try { var i=new INFO6(); i.Version=3; i.Name=str(name); i.Environment=str(environment); i.Driver=str(driver); i.Data=str(data); i.Config=str(config); i.Help=str(help);
    i.Dependencies=str(String.Join("\0",dependencies)+"\0\0"); i.DataType=str(dataType);
-   Check(AddPrinterDriverExW(null,6,ref i,0x14));
+   // Keep existing files when they are not older. COPY_ALL_FILES can attempt
+   // to overwrite an identical DLL already loaded by the local spooler.
+   const uint APD_COPY_NEW_FILES=0x8, APD_COPY_FROM_DIRECTORY=0x10;
+   Check(AddPrinterDriverExW(null,6,ref i,APD_COPY_NEW_FILES|APD_COPY_FROM_DIRECTORY));
   } finally { foreach(var p in allocated) Marshal.FreeHGlobal(p); }
  }
 }
@@ -102,6 +106,72 @@ function Get-PackageKey([string]$share,[string]$arch) {
     $hash = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($share.ToUpperInvariant()))).Replace('-','').ToLowerInvariant() + '-' + $arch + '.zip') }
     finally { $hash.Dispose() }
+}
+
+function Get-LegacyPrinterDriverState {
+    param($Manifest,[string]$Environment)
+    $driver=Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $Manifest.DriverName -and $_.PrinterEnvironment -ieq $Environment } | Select-Object -First 1
+    $paths=if($driver){@($driver.Path,$driver.DriverPath,$driver.DataFile,$driver.ConfigFile,$driver.HelpFile)+@($driver.DependentFiles)}else{@()}
+    $architecture=if($Environment -eq 'Windows x64'){'x64'}else{'W32X86'}
+    $directories=@((Join-Path $env:WINDIR "System32\spool\drivers\$architecture\3")) + @($paths | Where-Object {$_} | ForEach-Object {Split-Path -Parent $_} | Where-Object {$_} | Select-Object -Unique)
+    $matched=@{};$mismatches=New-Object Collections.Generic.List[string]
+    foreach($file in @($Manifest.Files | Where-Object {$_.Core -ne $true})){
+        $candidates=@($paths | Where-Object {$_ -and [IO.Path]::GetFileName($_) -ieq $file.Name}) + @($directories | ForEach-Object {Join-Path $_ $file.Name})
+        foreach($candidate in @($candidates | Select-Object -Unique)){
+            if(-not (Test-Path -LiteralPath $candidate -PathType Leaf)){continue}
+            try{if((Get-FileHash -LiteralPath $candidate -Algorithm SHA256 -ErrorAction Stop).Hash -ieq $file.SHA256){$matched[$file.Name]=$candidate;break}}catch{}
+        }
+        if(-not $matched.ContainsKey($file.Name)){$mismatches.Add([string]$file.Name)}
+    }
+    $bindingsMatch=[bool]$driver
+    if($driver){
+        $roles=@{Driver=@($driver.Path,$driver.DriverPath);Data=@($driver.DataFile);Config=@($driver.ConfigFile);Help=@($driver.HelpFile)}
+        foreach($field in @('Driver','Data','Config','Help')){
+            if($Manifest.$field -and -not @($roles[$field] | Where-Object {$_ -and [IO.Path]::GetFileName($_) -ieq $Manifest.$field}).Count){$bindingsMatch=$false}
+        }
+        foreach($dependency in @($Manifest.Dependencies)){
+            if(-not @($driver.DependentFiles | Where-Object {$_ -and [IO.Path]::GetFileName($_) -ieq $dependency}).Count){$bindingsMatch=$false}
+        }
+    }
+    return @{Confirmed=($driver -and $driver.MajorVersion -eq 3 -and $bindingsMatch -and $mismatches.Count -eq 0);Existing=[bool]$driver;MatchingPaths=$matched;Mismatches=@($mismatches.ToArray())}
+}
+
+function Invoke-LegacyPrinterDriverRegistration {
+    param($Manifest,[hashtable]$Resolved,[string]$Environment)
+    $name=[string]$Manifest.DriverName
+    $state=Get-LegacyPrinterDriverState -Manifest $Manifest -Environment $Environment
+    if($state.Confirmed){return @{Success=$true;DriverName=$name;Existing=$true;FilesCompared=$true;RegistrationAttempts=0;CopyPolicy='CopyNewFiles';Message="Driver '$name' confirmado por arquitetura, arquivos e vínculo do cadastro local."}}
+    # Reuse byte-identical local vendor files, even before a driver is registered.
+    # Their real timestamp/path prevents a fresh temporary copy becoming an update.
+    foreach($file in @($Manifest.Files | Where-Object {$_.Core -ne $true})){
+        if($state.MatchingPaths.ContainsKey($file.Name)){$Resolved[$file.Name]=$state.MatchingPaths[$file.Name]}
+    }
+    $dependencies=@($Manifest.Dependencies | ForEach-Object {$Resolved[[string]$_]})
+    for($attempt=1;$attempt -le 3;$attempt++){
+        Set-DriverStage "Registrar driver no Windows deste PC (tentativa $attempt/3)" -Resource $name
+        try{
+            [PrinterDriverTransfer]::Install($name,$Environment,$Resolved[$Manifest.Driver],$Resolved[$Manifest.Data],$Resolved[$Manifest.Config],$(if($Manifest.Help){$Resolved[$Manifest.Help]}else{''}),[string[]]$dependencies,[string]$Manifest.DataType)
+        }catch{
+            $failure=Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $name -Scope Local
+            $failure.DriverName=$name;$failure.RegistrationAttempts=$attempt;$failure.CopyPolicy='CopyNewFiles'
+            if($failure.Code -notin @(32,33)){return $failure}
+            $state=Get-LegacyPrinterDriverState -Manifest $Manifest -Environment $Environment
+            if($state.Confirmed){return @{Success=$true;DriverName=$name;Existing=$true;FilesCompared=$true;RegistrationAttempts=$attempt;CopyPolicy='CopyNewFiles';Message="Driver '$name' confirmado após a tentativa de registro."}}
+            if($attempt -eq 3){
+                $failure.DriverFiles=@($Resolved.Values | Select-Object -Unique)
+                $failure.Message="Um arquivo do driver '$name' está em uso neste computador (Windows $($failure.Code)). O registro foi tentado 3 vezes e não foi confirmado. Feche aplicativos/janelas que usam esta impressora e tente novamente. A opção Reiniciar Spooler está em Fila e serviços. Não é necessário informar outra senha por este erro."
+                return $failure
+            }
+            Start-Sleep -Milliseconds (300*$attempt)
+            continue
+        }
+        for($poll=0;$poll -lt 5;$poll++){
+            $state=Get-LegacyPrinterDriverState -Manifest $Manifest -Environment $Environment
+            if($state.Confirmed){return @{Success=$true;DriverName=$name;FilesCompared=$true;RegistrationAttempts=$attempt;CopyPolicy='CopyNewFiles';Message="Driver '$name' instalado e confirmado por arquitetura, arquivos e vínculo do cadastro local."}}
+            if($poll -lt 4){Start-Sleep -Milliseconds 250}
+        }
+        return @{Success=$false;Code=31;NativeCode=31;Stage='Confirmar arquivos do driver registrado';Resource=$name;FailureScope='Local';DriverName=$name;RegistrationAttempts=$attempt;CopyPolicy='CopyNewFiles';Message="O Windows não confirmou o cadastro e os arquivos esperados do driver '$name'."}
+    }
 }
 function Get-SafeFileName([string]$name) {
     if (-not $name -or $name -in @('.','..') -or $name -match '[\\/:\x00-\x1f]' -or $name.Length -gt 180 -or
@@ -390,24 +460,21 @@ try {
     }
     if (-not $manifest.Driver -or -not $manifest.Data -or -not $manifest.Config) { throw 'Driver incompleto.' }
     $dependencies = @($manifest.Dependencies | ForEach-Object { if (-not $resolved.ContainsKey([string]$_)) { throw 'Dependência não declarada.' }; $resolved[[string]$_] })
-    if($existingDriver){
-        $localPaths=@($existingDriver.Path,$existingDriver.DataFile,$existingDriver.ConfigFile,$existingDriver.HelpFile)+@($existingDriver.DependentFiles)
-        $equal=$existingDriver.MajorVersion -eq 3
-        foreach($vendor in @($manifest.Files | Where-Object { $_.Core -ne $true })){
-            $local=@($localPaths | Where-Object { $_ -and [IO.Path]::GetFileName($_) -ieq $vendor.Name }) | Select-Object -First 1
-            if(-not $local -or -not(Test-Path -LiteralPath $local -PathType Leaf) -or (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash -ine $vendor.SHA256){$equal=$false;break}
-        }
-        if($equal){return @{Success=$true;DriverName=$driverName;Existing=$true;FilesCompared=$true;PreparedPackageFound=$true;DriverAvailability='Confirmed';Message="Driver '$driverName' confirmado por arquitetura e hashes dos arquivos do fabricante."}}
-    }
     Set-DriverStage 'Registrar driver no Windows deste PC'
     if(-not('PrinterDriverTransfer' -as [type])){Add-Type -TypeDefinition $native -ErrorAction Stop}
-    [PrinterDriverTransfer]::Install($driverName,$environment,$resolved[$manifest.Driver],$resolved[$manifest.Data],$resolved[$manifest.Config],$(if ($manifest.Help) { $resolved[$manifest.Help] } else { '' }),[string[]]$dependencies,[string]$manifest.DataType)
-    $confirmed = Get-PrinterDriver -ErrorAction Stop | Where-Object { $_.Name -ieq $driverName -and $_.PrinterEnvironment -ieq $environment }
-    if (-not $confirmed) { throw 'O Windows não confirmou a instalação do driver.' }
-    return @{ Success=$true; DriverName=$driverName;PreparedPackageFound=$true;DriverAvailability='Confirmed'; Message="Driver '$driverName' recebido de $server e instalado neste PC." }
+    $legacyRegistration=Invoke-LegacyPrinterDriverRegistration -Manifest $manifest -Resolved $resolved -Environment $environment
+    $legacyRegistration.PreparedPackageFound=$true
+    $legacyRegistration.DriverAvailability=$(if($legacyRegistration.Success){'Confirmed'}else{'Unknown'})
+    if($infError){
+        $legacyRegistration.InfLookupCode=$infError.Code;$legacyRegistration.InfLookupStage=$infError.Stage
+        $legacyRegistration.InfLookupResource=$infError.Resource
+        if($infError.Stage -eq 'Consultar driver da fila remota'){$legacyRegistration.DriverQueryCode=$infError.Code}
+    }
+    return $legacyRegistration
 } catch {
     $failure=Get-PrinterOperationFailure -Record $_ -Stage $script:driverOperationStage -Resource $script:driverOperationResource -Scope $script:driverOperationScope
     $failure.DriverAvailability='Unknown';$failure.PreparedPackageFound=$preparedPackageFound
+    if($driverName){$failure.DriverName=$driverName}
     if($infError){
         $failure.InfLookupCode=$infError.Code;$failure.InfLookupStage=$infError.Stage
         $failure.InfLookupResource=$infError.Resource;$failure.InfLookupMessage=$infFailure

@@ -119,7 +119,7 @@ try{
   $result=Get-PrinterOperationFailure -Record $_ -Stage $currentStage -Resource $UNCPath -Scope Local
  }
  $result.QueueInstalled=$false
- $result.DriverName=$DriverName
+ if($DriverName){$result.DriverName=$DriverName}
 }
 if($injected -and $injected.RebootRequired){$result.RebootRequired=$true}
 if($Method -eq 'Cascade'){
@@ -128,12 +128,12 @@ if($Method -eq 'Cascade'){
  if($lastNativeError){$result.NativeConnectionCode=$lastNativeError}
  $result.DriverConfirmed=[bool]($injected -and $injected.Success)
  if($injected){
-  foreach($field in @('DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','InfLookupResource','PreparedPackageFound')){
+  foreach($field in @('DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','InfLookupResource','PreparedPackageFound','RegistrationAttempts','CopyPolicy','DriverFiles')){
    if($injected.ContainsKey($field)){$result[$field]=$injected[$field]}
   }
  }
 }
-$result.WorkerVersion='1.10.7';$result.AttemptId=[Guid]::NewGuid().ToString('N')
+$result.WorkerVersion='1.10.9';$result.AttemptId=[Guid]::NewGuid().ToString('N')
 $result.History=@($history.ToArray());$result.Cascaded=($Method -eq 'Cascade')
 if(-not $ResultPath){return $result}
 try{$result | Export-Clixml -LiteralPath $ResultPath -Force -ErrorAction Stop}catch{exit 2}

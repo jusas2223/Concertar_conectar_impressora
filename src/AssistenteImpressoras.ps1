@@ -116,7 +116,7 @@ function Write-AppLog {
 # Inicializar cabeçalho do arquivo de log
 Write-AppLog -Message "================================================================================" -Level "INFO"
 Write-AppLog -Message "Início de Atendimento - Assistente de Impressoras (Suporte Técnico)" -Level "INFO"
-Write-AppLog -Message "Versão do app: 1.10.7 | PowerShell: $($PSVersionTable.PSVersion) | Processo: $([IntPtr]::Size * 8) bits" -Level "INFO"
+Write-AppLog -Message "Versão do app: 1.10.9 | PowerShell: $($PSVersionTable.PSVersion) | Processo: $([IntPtr]::Size * 8) bits" -Level "INFO"
 Write-AppLog -Message "Computador: $env:COMPUTERNAME | Usuário: $env:USERNAME | Data: $((Get-Date).ToString())" -Level "INFO"
 Write-AppLog -Message "Arquivo de Log: $global:LogFilePath" -Level "INFO"
 Write-AppLog -Message "================================================================================" -Level "INFO"
@@ -1286,10 +1286,11 @@ function Connect-UNCPrinterSafe {
     $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server -ValidationMode $ValidationMode
     foreach($step in @($attempt.History)){if(-not [string]::IsNullOrWhiteSpace([string]$step)){Write-AppLog -Message ([string]$step) -Level INFO}}
     $diagnostic=@("Destino=$cleanUNC")
-    foreach($field in @('AttemptId','WorkerVersion','Success','QueueInstalled','Stage','Code','NativeCode','FailureScope','NativeConnectionCode','RemoteAccessCode','ShareLookupCode','AuthenticationCode','RecoveryReason','CredentialRetryRecommended','NeedsAuthentication','DriverName','DriverConfirmed','DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','PreparedPackageFound','PortMethod')){
+    foreach($field in @('AttemptId','WorkerVersion','Success','QueueInstalled','Stage','Code','NativeCode','FailureScope','NativeConnectionCode','RemoteAccessCode','ShareLookupCode','AuthenticationCode','RecoveryReason','CredentialRetryRecommended','NeedsAuthentication','DriverName','DriverConfirmed','DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','PreparedPackageFound','PortMethod','RegistrationAttempts','CopyPolicy')){
         if($attempt.ContainsKey($field)){$diagnostic+=($field+'='+(([string]$attempt[$field]) -replace '[\r\n]',' '))}
     }
     if($attempt.ContainsKey('NativeAttemptCodes')){$diagnostic+=('NativeAttemptCodes='+(@($attempt.NativeAttemptCodes) -join ','))}
+    if($attempt.DriverFiles){$diagnostic+=('DriverFiles='+($attempt.DriverFiles -join '; '))}
     Write-AppLog -Message ('Resultado da conexão: '+($diagnostic -join ' | ')) -Level INFO
     if($attempt.Cancelled){return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada; confira a fila antes de repetir.'}}
     if($attempt.TimedOut){return @{Success=$false;Code=1460;Cascaded=$true;Message=$attempt.Message}}
@@ -1557,7 +1558,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.8]"
+$form.Text = "Arrumar Impressora VG [v1.10.9]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen

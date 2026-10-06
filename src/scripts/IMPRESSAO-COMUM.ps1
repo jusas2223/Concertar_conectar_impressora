@@ -69,6 +69,10 @@ function Resolve-PrinterCredentialRecovery {
     if($Failure.Success -or $Failure.QueueInstalled -or $Failure.Cancelled -or $Failure.TimedOut){return $Failure}
     if($Failure.NeedsAuthentication){$Failure.RecoveryReason='RemoteAccessRefused';return $Failure}
     if($Failure.CredentialRetryRecommended){return $Failure}
+    if($Failure.FailureScope -eq 'Local' -and $Failure.Code -in @(32,33)){
+        $Failure.RecoveryReason='LocalDriverFileInUse'
+        return $Failure
+    }
     if($Failure.Contains('ShareLookupCode') -or $Failure.Contains('ShareLookupMessage')){return $Failure}
     $portDenied=$Failure.Code -eq 5 -and $Failure.Stage -in @('Criar porta local UNC','Validar e criar porta UNC no monitor local do Windows')
     $hasQueueProbe=$Failure.Contains('RemoteAccessCode')
