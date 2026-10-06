@@ -182,11 +182,12 @@ public static class PrinterNetworkAuth {
 
 function Request-PrinterServerCredential {
     param([string]$Server, [string]$InitialUser = '', [System.Windows.Forms.IWin32Window]$Parent,
-        [string]$Reason='')
+        [string]$Reason='', [switch]$AllowServerEdit, [switch]$RequireCredential)
 
     $dialog = [System.Windows.Forms.Form]::new()
-    $dialog.Text = "Conta para impressora em $Server"
-    $dialog.Size = [System.Drawing.Size]::new(455, 285)
+    $dialog.Text = if($RequireCredential){'Conectar usando conta do servidor'}else{"Conta para impressora em $Server"}
+    $dialog.ClientSize = [System.Drawing.Size]::new(510, 282)
+    $dialog.Font = [System.Drawing.Font]::new('Segoe UI', 9)
     $dialog.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $dialog.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
     $dialog.MaximizeBox = $false
@@ -195,50 +196,66 @@ function Request-PrinterServerCredential {
     $instruction = [System.Windows.Forms.Label]::new()
     $instruction.Text = $(if($Reason){$Reason}else{'O Windows recusou o acesso com a sessão atual.'}) + "`nUse uma conta com permissão no servidor e a senha da conta, não o PIN."
     $instruction.Location = [System.Drawing.Point]::new(15, 12)
-    $instruction.Size = [System.Drawing.Size]::new(410, 85)
+    $instruction.Size = [System.Drawing.Size]::new(478, 75)
     $dialog.Controls.Add($instruction)
+
+    $serverLabel = [System.Windows.Forms.Label]::new()
+    $serverLabel.Text = 'Hostname ou IP:'
+    $serverLabel.Location = [System.Drawing.Point]::new(15, 107)
+    $serverLabel.AutoSize = $true
+    $dialog.Controls.Add($serverLabel)
+    $serverBox = [System.Windows.Forms.TextBox]::new()
+    $serverBox.Name = 'CredentialServer'
+    $serverBox.Location = [System.Drawing.Point]::new(154, 103)
+    $serverBox.Size = [System.Drawing.Size]::new(340, 25)
+    $serverBox.Text = $Server
+    $serverBox.ReadOnly = -not $AllowServerEdit
+    $dialog.Controls.Add($serverBox)
 
     $userLabel = [System.Windows.Forms.Label]::new()
     $userLabel.Text = 'Usuário:'
-    $userLabel.Location = [System.Drawing.Point]::new(15, 107)
+    $userLabel.Location = [System.Drawing.Point]::new(15, 146)
     $userLabel.AutoSize = $true
     $dialog.Controls.Add($userLabel)
     $userBox = [System.Windows.Forms.TextBox]::new()
-    $userBox.Location = [System.Drawing.Point]::new(95, 103)
-    $userBox.Size = [System.Drawing.Size]::new(328, 23)
-    $userBox.Text = if ($InitialUser) { $InitialUser } else { "$Server\" }
+    $userBox.Name = 'CredentialUser'
+    $userBox.Location = [System.Drawing.Point]::new(154, 142)
+    $userBox.Size = [System.Drawing.Size]::new(340, 25)
+    $userBox.Text = if ($InitialUser) { $InitialUser } elseif($RequireCredential){''} else { "$Server\" }
     $dialog.Controls.Add($userBox)
 
     $passLabel = [System.Windows.Forms.Label]::new()
     $passLabel.Text = 'Senha:'
-    $passLabel.Location = [System.Drawing.Point]::new(15, 142)
+    $passLabel.Location = [System.Drawing.Point]::new(15, 185)
     $passLabel.AutoSize = $true
     $dialog.Controls.Add($passLabel)
     $passBox = [System.Windows.Forms.TextBox]::new()
-    $passBox.Location = [System.Drawing.Point]::new(95, 138)
-    $passBox.Size = [System.Drawing.Size]::new(328, 23)
+    $passBox.Name = 'CredentialPassword'
+    $passBox.Location = [System.Drawing.Point]::new(154, 181)
+    $passBox.Size = [System.Drawing.Size]::new(340, 25)
     $passBox.UseSystemPasswordChar = $true
     $dialog.Controls.Add($passBox)
 
     $connectButton = [System.Windows.Forms.Button]::new()
-    $connectButton.Text = 'Conectar'
-    $connectButton.Location = [System.Drawing.Point]::new(15, 187)
-    $connectButton.Size = [System.Drawing.Size]::new(110, 32)
+    $connectButton.Text = if($RequireCredential){'Usar esta conta'}else{'Conectar'}
+    $connectButton.Location = [System.Drawing.Point]::new(15, 231)
+    $connectButton.Size = [System.Drawing.Size]::new(135, 34)
     $connectButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
     $dialog.Controls.Add($connectButton)
     $dialog.AcceptButton = $connectButton
 
     $withoutButton = [System.Windows.Forms.Button]::new()
     $withoutButton.Text = 'Manter sessão atual'
-    $withoutButton.Location = [System.Drawing.Point]::new(137, 187)
-    $withoutButton.Size = [System.Drawing.Size]::new(135, 32)
+    $withoutButton.Location = [System.Drawing.Point]::new(163, 231)
+    $withoutButton.Size = [System.Drawing.Size]::new(156, 34)
     $withoutButton.DialogResult = [System.Windows.Forms.DialogResult]::Ignore
+    $withoutButton.Visible = -not $RequireCredential
     $dialog.Controls.Add($withoutButton)
 
     $cancelButton = [System.Windows.Forms.Button]::new()
     $cancelButton.Text = 'Cancelar'
-    $cancelButton.Location = [System.Drawing.Point]::new(284, 187)
-    $cancelButton.Size = [System.Drawing.Size]::new(135, 32)
+    $cancelButton.Location = [System.Drawing.Point]::new(332, 231)
+    $cancelButton.Size = [System.Drawing.Size]::new(162, 34)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancelButton)
     $dialog.CancelButton = $cancelButton
@@ -247,7 +264,7 @@ function Request-PrinterServerCredential {
         $choice = $dialog.ShowDialog($Parent)
         if ($choice -eq [System.Windows.Forms.DialogResult]::Ignore) { return @{ WithoutCredential=$true } }
         if ($choice -ne [System.Windows.Forms.DialogResult]::OK) { return @{ Cancelled=$true } }
-        return @{ User=$userBox.Text.Trim(); Password=$passBox.Text }
+        return @{ Server=$serverBox.Text.Trim(); User=$userBox.Text.Trim(); Password=$passBox.Text }
     } finally { $dialog.Dispose() }
 }
 
@@ -1540,7 +1557,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.7]"
+$form.Text = "Arrumar Impressora VG [v1.10.8]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1995,6 +2012,70 @@ function Get-PrinterCredentialReason {
     if($resource.Length -gt 150){$resource=$resource.Substring(0,147)+'...'}
     $stage=if($Failure.Stage){[string]$Failure.Stage}else{'acessar impressora no servidor'}
     return "Acesso recusado: $stage."+$(if($resource){"`nRecurso: $resource"}else{''})
+}
+
+function New-ExplicitPrinterCredentialSelection {
+    param([string]$UNCPath, [System.Collections.IDictionary]$Choice)
+    if(-not $Choice -or $Choice.Cancelled){return @{Success=$false;Cancelled=$true;Code=1223;Message='Solicitação de conta cancelada.'}}
+    try {
+        $match=[regex]::Match($UNCPath,'^\\\\([^\\]+)\\([^\\]+)$')
+        if(-not $match.Success){return @{Success=$false;Code=87;Message='Selecione um compartilhamento de impressora válido.'}}
+        $server=if($Choice.Server){([string]$Choice.Server).Trim().Trim('\')}else{$match.Groups[1].Value}
+        if($server -notmatch '^[A-Za-z0-9._-]+$'){
+            return @{Success=$false;Code=87;Message='Informe somente o hostname ou IP do computador servidor, sem nome de pasta ou impressora.'}
+        }
+        if($server -match '^[0-9.]+$'){
+            $address=$null
+            if($server -notmatch '^\d{1,3}(\.\d{1,3}){3}$' -or -not [Net.IPAddress]::TryParse($server,[ref]$address) -or $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork){
+                return @{Success=$false;Code=87;Message='O endereço IPv4 informado é inválido.'}
+            }
+        }
+        $user=([string]$Choice.User).Trim()
+        if(-not $user -or $user.EndsWith('\') -or -not $Choice.Password){
+            return @{Success=$false;Code=87;Message='Informe usuário e senha da conta do servidor. Use a senha da conta, não o PIN.'}
+        }
+        if($user.StartsWith('.\')){$user=$server+$user.Substring(1)}
+        elseif($user -notmatch '[\\@]'){$user="$server\$user"}
+        $credential=New-Object Management.Automation.PSCredential($user,(ConvertTo-SecureString $Choice.Password -AsPlainText -Force))
+        $share=$match.Groups[2].Value
+        return @{Success=$true;Server=$server;ShareName=$share;UNCPath="\\$server\$share";SourceUNC=$UNCPath;User=$user;Credential=$credential}
+    } finally {$Choice.Password=$null}
+}
+
+function Request-ExplicitPrinterConnectionCredential {
+    param([string]$UNCPath,[string]$InitialUser='', [System.Windows.Forms.IWin32Window]$Parent)
+    $server=([regex]::Match($UNCPath,'^\\\\([^\\]+)\\')).Groups[1].Value
+    $choice=Request-PrinterServerCredential -Server $server -InitialUser $InitialUser -Parent $Parent -AllowServerEdit -RequireCredential -Reason "Modo Win 11: informe a conta antes de conectar.`nCompartilhamento selecionado: $UNCPath. Ao mudar o servidor, o nome do compartilhamento será mantido."
+    return (New-ExplicitPrinterCredentialSelection -UNCPath $UNCPath -Choice $choice)
+}
+
+function Connect-PrinterUsingExplicitCredential {
+    param([System.Collections.IDictionary]$Selection,
+        [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='QueueOnly')
+    if(-not $Selection -or -not $Selection.Success -or -not $Selection.Credential){
+        return @{Success=$false;Code=87;Cascaded=$true;Message='Informe a conta do servidor antes de conectar.'}
+    }
+    if($global:SimulationMode){
+        return @{Success=$false;Simulated=$true;Code=0;Cascaded=$true;Message='Simulação: autenticação e conexão não executadas.'}
+    }
+    $unc=$Selection.UNCPath
+    $server=$Selection.Server
+    Write-AppLog -Message "Modo Win 11: autenticando a conta informada antes da conexão em $unc." -Level INFO
+    $auth=Invoke-BoundedPrinterAttempt -UNCPath $unc -Method Authenticate -TimeoutSeconds 15 -NetworkCredential $Selection.Credential -CredentialServer $server
+    if(-not $auth.Success){
+        $auth.Cascaded=$true;$auth.CredentialPrompted=$true
+        if($auth.Cancelled){$auth.Code=1223}elseif($auth.TimedOut){$auth.Code=1460}
+        Write-AppLog -Message "Modo Win 11: autenticação em $server não concluída; código $($auth.Code)." -Level AVISO
+        return $auth
+    }
+    $script:authenticatedPrinterServer=$server
+    $script:authenticatedPrinterUser=$Selection.User
+    $script:authenticatedPrinterCredential=$Selection.Credential
+    Write-AppLog -Message "Modo Win 11: conta autenticada em $server; iniciando a conexão com essa identidade de rede." -Level INFO
+    # A cascata recebe o token de rede desde a primeira chamada, sem repetir o diálogo.
+    $result=Connect-UNCPrinterSafe -UNCPath $unc -ValidationMode $ValidationMode
+    $result.CredentialPrompted=$true
+    return $result
 }
 
 function Format-PrinterAsNamedUNC {
@@ -2980,6 +3061,16 @@ $chkNetTestPage.Location = [System.Drawing.Point]::new(12, 72)
 $chkNetTestPage.AutoSize = $true
 $pnlNetBottom.Controls.Add($chkNetTestPage)
 
+$chkNetWin11 = [System.Windows.Forms.CheckBox]::new()
+$chkNetWin11.Text = 'Win 11'
+$chkNetWin11.AccessibleName = 'Win 11: informar conta do servidor antes de conectar'
+$chkNetWin11.AutoSize = $true
+$chkNetWin11.Location = [System.Drawing.Point]::new(905, 60)
+$chkNetWin11.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
+$pnlNetBottom.Controls.Add($chkNetWin11)
+$netCredentialTip = [System.Windows.Forms.ToolTip]::new()
+$netCredentialTip.SetToolTip($chkNetWin11, 'Abre hostname/IP, usuário e senha. A conta será usada desde a primeira tentativa. Também pode ser usado com outros Windows.')
+
 $btnConnectSelected = [System.Windows.Forms.Button]::new()
 $btnConnectSelected.Text = "Conectar Impressora Selecionada"
 $btnConnectSelected.Size = [System.Drawing.Size]::new(260, 42)
@@ -3001,7 +3092,7 @@ $btnLocalPortSelected.Font = [System.Drawing.Font]::new('Segoe UI', 9.5, [System
 $pnlNetBottom.Controls.Add($btnLocalPortSelected)
 
 function Get-SelectedPrinterConnectionTarget {
-    param([switch]$Preview)
+    param([switch]$Preview,[switch]$ManualCredential)
     if ($dgvNetPrinters.SelectedRows.Count -eq 0) { return @{Success=$false;Message='Selecione uma impressora na tabela.'} }
     $row = $dgvNetPrinters.SelectedRows[0]
     $path = Format-PrinterAsNamedUNC ([string]$row.Cells['UNC'].Value)
@@ -3009,6 +3100,13 @@ function Get-SelectedPrinterConnectionTarget {
         return @{Success=$true;Direct=$true;UNCPath=$path}
     }
     $mode = if ($cmbNetEndpointMode.SelectedIndex -eq 1) { 'IP' } else { 'Hostname' }
+    if($ManualCredential){
+        $knownTarget=Resolve-PrinterConnectionEndpoint -UNCPath $path -ServerDisplay ([string]$row.Cells['Server'].Value) -Mode $mode -Preview
+        if($knownTarget.Success){return $knownTarget}
+        $match=[regex]::Match($path,'^\\\\([^\\]+)\\([^\\]+)$')
+        if($match.Success){return @{Success=$true;Server=$match.Groups[1].Value;ShareName=$match.Groups[2].Value;UNCPath=$path;Mode='Win 11 / destino manual';Aliases=@($match.Groups[1].Value)}}
+        return $knownTarget
+    }
     return (Resolve-PrinterConnectionEndpoint -UNCPath $path -ServerDisplay ([string]$row.Cells['Server'].Value) -Mode $mode -Preview:$Preview)
 }
 
@@ -3869,6 +3967,28 @@ $btnLocalPortSelected.Add_Click({
     }
 })
 
+$chkNetWin11.Add_CheckedChanged({
+    $script:pendingPrinterConnectionCredential=$null
+    if(-not $chkNetWin11.Checked -or $global:SimulationMode){return}
+    $target=Get-SelectedPrinterConnectionTarget -ManualCredential
+    if(-not $target.Success -or $target.Direct){
+        $chkNetWin11.Checked=$false
+        [System.Windows.Forms.MessageBox]::Show($form,'Selecione uma impressora compartilhada na tabela antes de marcar Win 11.','Conta do servidor',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    $selection=Request-ExplicitPrinterConnectionCredential -UNCPath $target.UNCPath -InitialUser $txtNetUser.Text.Trim() -Parent $form
+    if(-not $selection.Success){
+        $chkNetWin11.Checked=$false
+        if(-not $selection.Cancelled){[System.Windows.Forms.MessageBox]::Show($form,$selection.Message,'Conta do servidor',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null}
+        return
+    }
+    $script:pendingPrinterConnectionCredential=$selection
+    $txtNetUser.Text=$selection.User
+    $txtNetPass.Clear()
+    $lblNetConnectionPath.Text='Conta informada; destino: '+$selection.UNCPath
+})
+
+
 # Acao: Conectar Impressora Selecionada (1 Clique)
 $btnConnectSelected.Add_Click({
     if ($dgvNetPrinters.SelectedRows.Count -eq 0) {
@@ -3894,12 +4014,30 @@ $btnConnectSelected.Add_Click({
         return
     }
 
-    $target = Get-SelectedPrinterConnectionTarget
+    $target = Get-SelectedPrinterConnectionTarget -ManualCredential:$chkNetWin11.Checked
     if (-not $target.Success) {
         [System.Windows.Forms.MessageBox]::Show($form, $target.Message, 'Destino da conexão', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
     }
     $unc = $target.UNCPath
+    $explicitSelection=$null
+    if($chkNetWin11.Checked -and -not $global:SimulationMode){
+        $explicitSelection=$script:pendingPrinterConnectionCredential
+        $script:pendingPrinterConnectionCredential=$null
+        if(-not $explicitSelection -or $explicitSelection.SourceUNC -ine $unc){
+            $explicitSelection=Request-ExplicitPrinterConnectionCredential -UNCPath $unc -InitialUser $txtNetUser.Text.Trim() -Parent $form
+        }
+        if(-not $explicitSelection.Success){
+            if(-not $explicitSelection.Cancelled){[System.Windows.Forms.MessageBox]::Show($form,$explicitSelection.Message,'Conta do servidor',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null}
+            return
+        }
+        $unc=$explicitSelection.UNCPath
+        $srv=$explicitSelection.Server
+        $target.Mode='Win 11 / conta informada'
+        $txtNetUser.Text=$explicitSelection.User
+        $txtNetPass.Clear()
+        $lblNetConnectionPath.Text='Destino: '+$unc
+    }
     Write-AppLog -Message ("Destino escolhido ($($target.Mode)): $unc.") -Level INFO
 
     # A busca manual não é obrigatória para autenticar: o botão de conexão
@@ -3907,14 +4045,14 @@ $btnConnectSelected.Add_Click({
     $serverForConnection = ([regex]::Match($unc, '^\\\\([^\\]+)\\')).Groups[1].Value
     $enteredUser = $txtNetUser.Text.Trim()
     $enteredPassword = $txtNetPass.Text
-    if ($enteredPassword -and -not $enteredUser) {
+    if (-not $chkNetWin11.Checked -and $enteredPassword -and -not $enteredUser) {
         [System.Windows.Forms.MessageBox]::Show($form,
             "Informe usuário e senha juntos. Use uma conta do computador $serverForConnection e a senha da conta, não o PIN.",
             'Credenciais incompletas', [System.Windows.Forms.MessageBoxButtons]::OK,
             [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         return
     }
-    if ($enteredUser -and $enteredPassword -and -not $global:SimulationMode) {
+    if (-not $chkNetWin11.Checked -and $enteredUser -and $enteredPassword -and -not $global:SimulationMode) {
         $newCredential = New-Object System.Management.Automation.PSCredential($enteredUser,(ConvertTo-SecureString $enteredPassword -AsPlainText -Force))
         $auth = Connect-PrinterServerAuthenticated -Server $serverForConnection -User $enteredUser -Password $enteredPassword
         $txtNetPass.Clear()
@@ -3934,7 +4072,9 @@ $btnConnectSelected.Add_Click({
     }
 
     # Se for impressora compartilhada de rede (SMB / UNC)
+    $connectionControls=@(@($chkNetWin11,$cmbNetEndpointMode,$dgvNetPrinters) | ForEach-Object {@{Control=$_;Enabled=$_.Enabled}})
     try {
+        foreach($state in $connectionControls){$state.Control.Enabled=$false}
         $script:cancelPrinterConnection = $false
         $btnCancelConnection.Enabled = $true
         $btnCancelConnection.Visible = $true
@@ -3952,7 +4092,11 @@ $btnConnectSelected.Add_Click({
                 $btnCancelConnection.Visible = $true
             }
         }
-        $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount -CredentialServerAliases $target.Aliases -ValidationMode $(if($chkNetTestPage.Checked){'TestPage'}else{'QueueOnly'})
+        if($chkNetWin11.Checked -and -not $global:SimulationMode){
+            $result=Connect-PrinterUsingExplicitCredential -Selection $explicitSelection -ValidationMode $(if($chkNetTestPage.Checked){'TestPage'}else{'QueueOnly'})
+        } else {
+            $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount -CredentialServerAliases $target.Aliases -ValidationMode $(if($chkNetTestPage.Checked){'TestPage'}else{'QueueOnly'})
+        }
         if ($script:authenticatedPrinterServer -ieq $serverForConnection -and $script:authenticatedPrinterUser) {
             $txtNetUser.Text = $script:authenticatedPrinterUser
         }
@@ -4056,6 +4200,7 @@ $btnConnectSelected.Add_Click({
     } finally {
         $btnCancelConnection.Visible = $false
         $script:cancelPrinterConnection = $false
+        foreach($state in $connectionControls){if(-not $state.Control.IsDisposed){$state.Control.Enabled=$state.Enabled}}
         Hide-LoadingIndicator -Button $btnConnectSelected
     }
 })

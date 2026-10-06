@@ -2,7 +2,9 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.7**.
+Versão atual: **1.10.8**.
+
+A caixa **Win 11**, ao lado do botão verde, abre hostname/IP, usuário e senha antes de conectar. Ao marcar, informe a conta e clique em **Usar esta conta**; depois clique em **Conectar impressora**. A cascata usa essa identidade desde a primeira tentativa. Desmarcada, mantém o acesso automático e a recuperação quando necessário. [Uso e testes do modo Win 11](MODO_WIN11_1.10.8.md).
 
 Corrigida a recuperação quando a conexão retorna 709 e a porta UNC é negada, com consulta remota inconclusiva. O app verifica o compartilhamento antes de oferecer outra conta; preserva recusas locais, mantém os erros originais e distingue consulta de driver falhada de ausência comprovada. [Correção de acesso, testes e limites da 1.10.7](CORRECAO_ACESSO_1.10.7.md).
 
