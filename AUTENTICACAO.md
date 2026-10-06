@@ -1,10 +1,12 @@
-﻿# Autenticação sob demanda — versão 1.10.4
+﻿# Autenticação sob demanda — versão 1.10.5
 
 ## Como usar
 
 No servidor, prepare o host e o driver da fila compartilhada. No cliente, selecione o computador pelo hostname (padrão) ou IP e clique em Conectar. Não é necessário preencher uma conta antes de tentar: o programa usa a sessão atual.
 
 Se o Windows identificar recusa de acesso remoto, a janela de conta informa a etapa e o recurso recusado. Digite uma conta do computador servidor, por exemplo `COMPUTADOR\usuario`, e sua senha de conta, não o PIN. A mesma rotina atende Conectar, Instalar por caminho, Receber driver e Instalar via porta local.
+
+Na cascata, uma fila confirmada como compartilhamento de impressão também permite oferecer outra conta após falha nativa 709/11b/bcb e falha dos demais níveis. Recupera a tentativa com credencial explícita da versão 1.9.7 sem pedir senha quando a sessão atual já conecta. Uma tentativa com conta explícita não abre novamente essa oferta por erro ambíguo.
 
 O programa solicita uma conta e repete a operação no máximo uma vez por ação. Uma conta anterior recusada pode ser substituída. Cancelar encerra; Manter sessão atual conserva o erro da primeira tentativa sem repetir a operação.
 
@@ -22,8 +24,8 @@ Um código 709 ou 87 isolado não comprova senha ausente. Pacote inexistente, se
 
 ## Verificação da entrega
 
-18 scripts de verificação passaram em Windows PowerShell 5.1, incluindo 20 cenários de autenticação e nove cenários de cascata. Cobrem recusa de leitura do driver após 709, substituição de credencial recusada, senha rejeitada, cancelamento, ausência de pacote, erro local, erro 87, job em erro e limite de repetição.
+19 scripts de verificação passaram em Windows PowerShell 5.1, incluindo 22 cenários de autenticação e 11 cenários de cascata. Cobrem recusa de leitura do driver após 709, substituição de credencial recusada, senha rejeitada, cancelamento, ausência de pacote, erro local, conta alternativa após 709 com compartilhamento confirmado, erro 87, job em erro e limite de repetição.
 
 O worker real de sessão/leitura foi executado no host, sem alterar conta, driver ou fila. Esse host permitiu a leitura também na tentativa com identidade alternativa; portanto esse teste não comprova rejeição real de senha em outro servidor. As recusas de acesso foram verificadas com fixtures controladas.
 
-Os testes não comprovam impressão física nem encerram a validação da MP em um cliente Windows 10 real. O EXE só pede uma conta automaticamente quando identifica a recusa necessária; acesso já permitido não exige senha.
+Os testes não comprovam impressão física nem encerram a validação da MP em um cliente Windows 10 real. Acesso já permitido não exige senha. A nova oferta após fila confirmada é uma tentativa de recuperação; não declara que 709 ou 87 sejam sempre erros de autenticação.

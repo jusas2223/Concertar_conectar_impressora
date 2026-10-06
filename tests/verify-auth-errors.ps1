@@ -59,7 +59,7 @@ switch($Scenario){
 }
 
 $source=[IO.File]::ReadAllText((Join-Path $root 'src\AssistenteImpressoras.ps1'))
-foreach($pattern in @('(?s)\$received = Invoke-PrinterOperationUsingAvailableSession.*?-Method InstallDriver','(?s)\$attempt = Invoke-PrinterOperationUsingAvailableSession.*?Invoke-LocalPortInstallElevated','(?s)\$res = Connect-PrinterUsingAvailableSession -UNCPath \$unc -RequestCredential')){
+foreach($pattern in @('(?s)\$received = Invoke-PrinterOperationUsingAvailableSession.*?-Method InstallDriver','(?s)\$attempt = Invoke-PrinterOperationUsingAvailableSession.*?Invoke-LocalPortInstallElevated','(?m)\$res = Connect-PrinterUsingAvailableSession -UNCPath \$unc[^\r\n]*-RequestCredential')){
  if($source -notmatch $pattern){throw 'Um caminho da interface ficou sem a solicitação de conta'}
 }
 'OK: códigos remotos/locais, erros reais do worker do driver e pedidos de conta em todos os caminhos.'

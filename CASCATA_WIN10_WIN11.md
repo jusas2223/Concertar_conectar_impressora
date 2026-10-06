@@ -1,10 +1,12 @@
-﻿# Conexão em cascata — versão 1.10.4
+﻿# Conexão em cascata — versão 1.10.5
 
 ## Pelo executável
 
-1. No servidor, selecione a impressora local compartilhada e clique em **Preparar host e driver**. Aplica as políticas de RPC solicitadas, concede leitura a Usuários Autenticados em print$, reinicia o Spooler e publica o pacote quando necessário.
+1. No servidor, selecione a impressora local compartilhada e clique em **Preparar host e driver**. Prepara serviço Servidor, compartilhamento nos adaptadores ativos e três regras SMB/RPC do aplicativo; confirma a porta 445 local; aplica as políticas de RPC solicitadas; concede leitura a Usuários Autenticados em print$; reinicia o Spooler e publica o pacote quando necessário. Firewall de terceiros e regras de domínio podem continuar impedindo acesso externo.
 2. No cliente, abra o mesmo EXE, selecione a fila e clique em **Conectar impressora**. Deixe usuário e senha em branco para usar o acesso atual do Windows. Se quiser usar outra conta desde o início, preencha ambos em **Buscar servidor**. O EXE solicita elevação na abertura, antes de coletar as credenciais.
-3. A conexão aplica as políticas locais do cliente, reinicia o Spooler, executa a cascata e envia uma página de validação. O prazo total do worker é 180 segundos, com cancelamento; o encerramento inclui os processos filhos, como PnPUtil.
+3. A conexão executa a cascata sem aplicar políticas ou reiniciar o Spooler. A página de validação só é enviada quando o operador marca essa opção. O prazo total do worker é 180 segundos, com cancelamento; o encerramento inclui os processos filhos, como PnPUtil.
+
+Se necessário, **Impressoras locais → Preparar cliente / restaurar políticas** executa a preparação explícita do cliente ou restaura os valores do Registro salvos pelo EXE. Restaurar não remove filas, drivers, permissões de print$, regras de firewall nem vínculos de adaptador. Não inventa valores padrão quando não existe cópia válida. Valores alterados posteriormente para algo diferente do aplicado pelo EXE são preservados.
 
 As políticas solicitadas reduzem as restrições de instalação de drivers e permitem guest no cliente. Os valores anteriores do Registro ficam em `%LOCALAPPDATA%\AssistenteImpressoras\Politicas`. A permissão concedida a print$ é de leitura; não dá acesso de gravação. Políticas de domínio podem prevalecer ou reaplicar configurações.
 
@@ -23,7 +25,7 @@ Conectar, Instalar por porta local e os diagnósticos seguem a seleção. A cred
 
 O botão verde tenta primeiro a sessão atual do Windows ou a credencial do servidor já confirmada em memória. O comportamento é o mesmo para Win10 → Win10 e Win10 → Win11. Não exige senha previamente só por causa da versão do Windows.
 
-Recusa de acesso/autenticação identificada no worker permite solicitar outra conta uma vez e repetir uma vez. Código 709, driver ausente, parâmetro inválido, servidor indisponível, conflito de sessão 1219, cancelamento e prazo excedido não abrem automaticamente a janela de conta. Fila já instalada com job em erro também não solicita conta nem reenvia o job. A escolha Manter sessão atual encerra a tentativa sem nova conexão.
+Recusa de acesso/autenticação identificada no worker permite solicitar outra conta uma vez e repetir uma vez. Também oferece outra conta se a tentativa nativa retornou 709/11b/bcb, a cascata não instalou e NetShareGetInfo confirmou que o destino é um compartilhamento de impressão. Essa combinação indica uma tentativa de recuperação, não comprova senha incorreta. Código 709/87 isolado, servidor indisponível, conflito de sessão 1219, cancelamento e prazo excedido não bastam para abrir a janela de conta. Fila já instalada com job em erro também não solicita conta nem reenvia o job. A escolha Manter sessão atual encerra a tentativa sem nova conexão.
 
 A credencial permanece somente em memória durante a execução. Não aparece em argumentos, logs ou arquivos. Ao selecionar outro servidor, a credencial anterior não é aplicada a ele; um campo de usuário sem senha não obriga autenticação antes de tentar a sessão atual. Permissões do servidor continuam determinando se o acesso atual é aceito.
 
@@ -51,9 +53,9 @@ PnPUtil usa /add-driver e /install desde Windows 10 1607. Nas builds anteriores,
 
 Get-Printer confirma nome, porta e driver da fila local, ou UNC exato da fila remota. O retorno de processo/cmdlet sozinho não vale como sucesso.
 
-A página de validação é renderizada pelo driver via GDI, em vez de mandar texto RAW que seria incompatível com parte dos modelos. StartDoc fornece um JobId; Get-PrintJob acompanha esse ID por até 10 segundos. Error, Retrying, Offline, PaperOut e Blocked produzem falha. Trabalho ainda presente produz resultado pendente. Outros jobs não são confundidos com o job de teste; QueueClean informa se a fila inteira está vazia.
+A página de validação opcional é renderizada pelo driver via GDI, em vez de mandar texto RAW que seria incompatível com parte dos modelos. StartDoc fornece um JobId; Get-PrintJob acompanha esse ID por até 10 segundos. Error, Retrying, Offline, PaperOut e Blocked produzem falha do teste, mantendo QueueInstalled quando a instalação foi confirmada. Trabalho ainda presente produz resultado pendente. Outros jobs não são confundidos com o job de teste; QueueClean informa se a fila inteira está vazia.
 
-Job que saiu da fila do cliente não comprova saída física no papel. QueueInstalled, JobValidated e PhysicalPrintConfirmed são campos distintos. Impressora desconectada ou pausada pode deixar a fila instalada e o teste pendente. Não reenviar automaticamente.
+Job que saiu da fila do cliente não comprova saída física no papel. QueueInstalled, JobValidationAttempted, JobValidated e PhysicalPrintConfirmed são campos distintos. Impressora desconectada ou pausada pode deixar a fila instalada e o teste pendente. A interface apresenta essa condição como fila instalada com teste pendente/falhou. Não reenviar automaticamente.
 
 ## Uso dos scripts completos
 
@@ -70,11 +72,11 @@ Distribua os três workers junto com IMPRESSAO-COMUM.ps1, ou use o EXE que incor
 & .\INSTALAR-PORTA-LOCAL.ps1 -Server $Servidor -ShareName $Compartilhamento -DriverName $DriverConfirmado
 ```
 
-ResultPath produz CLIXML e arquivo .progress. Sem ResultPath, retorna um objeto ao chamador. Métodos antigos AddPrinter, WScript, PublishDriver e InstallDriver continuam disponíveis; Cascade é o padrão e é o método usado pela interface. QueueOnly dispensa a página em uma invocação explícita para teste de registro; a cascata da interface usa TestPage.
+ResultPath produz CLIXML e arquivo .progress. Sem ResultPath, retorna um objeto ao chamador. Métodos antigos AddPrinter, WScript, PublishDriver e InstallDriver continuam disponíveis; Cascade e ValidationMode QueueOnly são os padrões. A interface usa TestPage apenas com a opção de página marcada. PrepareClient, RestoreClientPolicies e RestoreHostPolicies são ações explícitas no computador local.
 
 ## Evidência desta entrega
 
-- 14 testes automatizados passaram, incluindo oito cenários da cascata e casos de INF ambíguo/registro ausente.
+- A entrega 1.10.5 verifica 19 scripts, incluindo 11 cenários da cascata, 22 de autenticação, restauração com cópia anterior e preparação explícita SMB/RPC. [Comparação e evidência](REGRESSAO_1.10.5.md).
 - Windows 11: transferência SMB/registro temporário de Tipo 3 e rejeição de pacote adulterado passaram; driver de teste removido.
 - Windows 11: GDI criou um job real em fila temporária pausada, retornou pendente e não anunciou impressão; job/fila removidos.
 - Recursos embutidos conferidos contra os fontes, PowerShell 5.1 e BOM verificados.
@@ -86,4 +88,4 @@ ResultPath produz CLIXML e arquivo .progress. Sem ResultPath, retorna um objeto 
 - https://learn.microsoft.com/en-us/windows/win32/printdocs/driver-info-8
 - https://learn.microsoft.com/en-us/troubleshoot/windows-client/printing/windows-11-rpc-connection-updates-for-print
 
-Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.4.
+Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.5.

@@ -1,9 +1,9 @@
 ﻿param(
  [string]$UNCPath='', [string]$ResultPath='',
- [ValidateSet('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate')][string]$Method='Cascade',
+ [ValidateSet('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate','RestoreClientPolicies','RestoreHostPolicies')][string]$Method='Cascade',
  [string]$Server='', [string]$ShareName='', [string]$DriverName='',
- [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='TestPage',
- [switch]$SkipPolicyPreparation, [string]$StateDirectory='', [string]$AccessResource=''
+ [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='QueueOnly',
+ [switch]$SkipPolicyPreparation, [string]$StateDirectory='', [string]$AccessResource='', [switch]$HasNetworkCredential
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'IMPRESSAO-COMUM.ps1')
@@ -31,8 +31,9 @@ function Complete-PrinterConnection {
  param($Printer,[string]$Level,[bool]$LocalPort)
  $completed=@{Success=$true;QueueInstalled=$true;QueueName=[string]$Printer.Name;ConnectedUNC=[string]$Printer.Name;
  DriverName=[string]$Printer.DriverName;Level=$Level;LocalPort=$LocalPort;PortUNC=$UNCPath;
- JobValidated=$false;PhysicalPrintConfirmed=$false;Message='Fila registrada e confirmada no Windows.'}
+ JobValidated=$false;JobValidationAttempted=$false;PhysicalPrintConfirmed=$false;Message='Fila registrada e confirmada no Windows.'}
  if($ValidationMode -eq 'TestPage'){
+  $completed.JobValidationAttempted=$true
   Write-ConnectionStage 'Validar job de teste identificado pelo JobId'
   try{
    $delivery=Test-PrinterJobDelivery -QueueName $Printer.Name -Seconds 10
@@ -43,7 +44,9 @@ function Complete-PrinterConnection {
  return $completed
 }
 try{
- if($Method -eq 'PrepareClient'){
+ if($Method -in @('RestoreClientPolicies','RestoreHostPolicies')){
+  $result=Restore-PrinterCompatibilityPolicies -Role $(if($Method -eq 'RestoreClientPolicies'){'Client'}else{'Host'}) -StateDirectory $StateDirectory
+ }elseif($Method -eq 'PrepareClient'){
   $result=& (Join-Path $PSScriptRoot 'DRIVER-DO-SERVIDOR.ps1') -Action PrepareClient -StateDirectory $StateDirectory
  }else{
   $address=Resolve-PrinterUNC -UNCPath $UNCPath -Server $Server -ShareName $ShareName
@@ -70,11 +73,8 @@ try{
     else{$result=$attempt}
    }
   }else{
-   if(-not $SkipPolicyPreparation){
-    $currentStage='Preparar políticas locais do cliente';Write-ConnectionStage $currentStage
-    $policy=Set-PrinterCompatibilityPolicies -Role Client -StateDirectory $StateDirectory
-    Write-ConnectionStage ($policy.Message+' Estado anterior: '+$policy.StatePath)
-   }
+   # Connecting must not restart a Spooler that may also serve other PCs.
+   # Compatibility changes remain explicit in PrepareClient/PrepareHost.
    $currentStage='Nível 1: conexão nativa';Write-ConnectionStage $currentStage
    $native=Try-NativePrinterConnection -Path $UNCPath
    if($native.Success){$result=Complete-PrinterConnection -Printer $native.Printer -Level Native -LocalPort $false}
@@ -119,6 +119,20 @@ try{
  $result.DriverName=$DriverName
 }
 if($injected -and $injected.RebootRequired){$result.RebootRequired=$true}
+if($Method -eq 'Cascade' -and -not $result.Success -and -not $result.QueueInstalled -and
+   -not $HasNetworkCredential -and -not $result.NeedsAuthentication -and $lastNativeError -in @(1801,283,3019) -and
+   -not($result.FailureScope -eq 'Local' -and $result.Code -eq 5)){
+ try{
+  $shareCode=Test-PrinterSharedQueueExists -Server $Server -ShareName $ShareName
+  $result.ShareLookupCode=$shareCode
+  if($shareCode -eq 0){$result.CredentialRetryRecommended=$true;$result.NativeConnectionCode=$lastNativeError;$result.ConfirmedUNC=$UNCPath}
+  elseif($shareCode -in @(5,86,1244,1326,1385,1909)){
+   $result.PreviousFailureCode=$result.Code;$result.NeedsAuthentication=$true;$result.Resource=$UNCPath;$result.FailureScope='Remote'
+   $result.Code=$shareCode;$result.NativeCode=$shareCode;$result.Stage='Confirmar fila compartilhada'
+   $result.Message='O servidor recusou a consulta ao compartilhamento. Erro anterior da instalação: '+$result.Message
+  }
+ }catch{Write-ConnectionStage ('Não foi possível confirmar o compartilhamento para oferecer outra conta: '+$_.Exception.Message)}
+}
 $result.History=@($history.ToArray());$result.Cascaded=($Method -eq 'Cascade')
 if(-not $ResultPath){return $result}
 try{$result | Export-Clixml -LiteralPath $ResultPath -Force -ErrorAction Stop}catch{exit 2}

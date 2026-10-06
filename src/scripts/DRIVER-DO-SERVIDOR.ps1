@@ -223,7 +223,14 @@ try {
         if ($server -notin @($env:COMPUTERNAME,'localhost','127.0.0.1')) { throw 'Prepare o driver no próprio computador que compartilha a impressora.' }
         $printer = Get-Printer -ErrorAction Stop | Where-Object { $_.Shared -and $_.ShareName -ieq $share } | Select-Object -First 1
         if (-not $printer) { throw 'Esta fila não está compartilhada neste computador.' }
-        if($Action -eq 'PrepareHost'){$policy=Set-PrinterCompatibilityPolicies -Role Host -StateDirectory $StateDirectory; Set-DriverStage $policy.Message}
+        if($Action -eq 'PrepareHost'){
+            Set-DriverStage 'Preparar serviço e firewall de compartilhamento do host'
+            $network=Enable-PrinterHostNetworkAccess
+            Set-DriverStage $network.Message
+            $policy=Set-PrinterCompatibilityPolicies -Role Host -StateDirectory $StateDirectory
+            $policy.Message=$network.Message+' '+$policy.Message
+            Set-DriverStage $policy.Message
+        }
         $infPath=''
         try{$infPath=[PrinterDriverTransfer]::DriverInf($printer.Name,$environment)}catch{}
         $spoolRoot=Join-Path $env:WINDIR 'System32\spool\drivers'

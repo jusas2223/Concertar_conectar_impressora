@@ -36,8 +36,11 @@ public static class PrinterRemoteAccess {
  [DllImport("mpr.dll",CharSet=CharSet.Unicode)] static extern int WNetAddConnection2W(ref RESOURCE resource,string password,string user,int flags);
  [DllImport("winspool.drv",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool OpenPrinterW(string name,out IntPtr handle,IntPtr defaults);
  [DllImport("winspool.drv",SetLastError=true)] static extern bool ClosePrinter(IntPtr handle);
+ [DllImport("Netapi32.dll",CharSet=CharSet.Unicode)] static extern int NetShareGetInfo(string server,string share,int level,out IntPtr buffer);
+ [DllImport("Netapi32.dll")] static extern int NetApiBufferFree(IntPtr buffer);
  public static int Connect(string server){var resource=new RESOURCE();resource.RemoteName="\\\\"+server+"\\IPC$";return WNetAddConnection2W(ref resource,null,null,0);}
  public static int Queue(string path){IntPtr handle; if(!OpenPrinterW(path,out handle,IntPtr.Zero))return Marshal.GetLastWin32Error();try{return 0;}finally{ClosePrinter(handle);}}
+ public static int PrintShare(string server,string share){IntPtr buffer=IntPtr.Zero;try{int code=NetShareGetInfo("\\\\"+server,share,1,out buffer);if(code!=0)return code;return (Marshal.ReadInt32(buffer,IntPtr.Size)&0xffff)==2?0:67;}finally{if(buffer!=IntPtr.Zero)NetApiBufferFree(buffer);}}
 }
 '@ -ErrorAction Stop
 }
@@ -54,6 +57,11 @@ function Test-PrinterNetworkSession {
         Resource=('\\'+$Server+'\IPC$');FailureScope='Remote';
         NeedsAuthentication=($code -in @(5,86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202));
         Message=$(if($code -eq 0){'Sessão de rede estabelecida; o acesso à fila e ao pacote ainda será validado.'}else{'O servidor recusou a sessão de rede: '+([ComponentModel.Win32Exception]::new($code).Message)+' (código '+$code+').'})}
+}
+function Test-PrinterSharedQueueExists {
+    param([string]$Server,[string]$ShareName)
+    Initialize-PrinterRemoteAccessApi
+    return [PrinterRemoteAccess]::PrintShare($Server,$ShareName)
 }
 function Test-PrinterDriverResourceAccess {
     param([string]$Resource)
@@ -101,9 +109,8 @@ function Wait-ExactPrinter {
     } while ($true)
     return $null
 }
-function Set-PrinterCompatibilityPolicies {
-    param([ValidateSet('Host','Client')][string]$Role,[string]$StateDirectory)
-    Assert-PrinterAdmin
+function Get-PrinterCompatibilityPolicyEntries {
+    param([ValidateSet('Host','Client')][string]$Role)
     $plan=@()
     if ($Role -eq 'Host') {
         foreach($entry in @(@('RpcUseNamedPipeProtocol',1),@('RpcProtocols',7),@('RpcOverNamedPipesAuthLevel',1))) {
@@ -116,6 +123,118 @@ function Set-PrinterCompatibilityPolicies {
         }
         $plan+=@{Path='SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters';Name='AllowInsecureGuestAuth';Value=1}
     }
+    return $plan
+}
+function Test-PrinterLocalSMBListener {
+    $client=[Net.Sockets.TcpClient]::new();$pending=$null
+    try{
+        $pending=$client.BeginConnect('127.0.0.1',445,$null,$null)
+        if(-not $pending.AsyncWaitHandle.WaitOne(1500)){return $false}
+        $client.EndConnect($pending)
+        return $true
+    }catch{return $false}finally{if($pending){$pending.AsyncWaitHandle.Close()};$client.Close()}
+}
+function Enable-PrinterHostNetworkAccess {
+    Assert-PrinterAdmin
+    $changedAdapters=@()
+    foreach($binding in @(Get-NetAdapterBinding -ComponentID ms_server -ErrorAction Stop | Where-Object { -not $_.Enabled })){
+        $adapter=Get-NetAdapter -Name $binding.Name -ErrorAction SilentlyContinue
+        if($adapter.Status -eq 'Up'){
+            Enable-NetAdapterBinding -Name $binding.Name -ComponentID ms_server -ErrorAction Stop | Out-Null
+            $changedAdapters+=$binding.Name
+        }
+    }
+    $service=Get-Service LanmanServer -ErrorAction Stop
+    Set-Service LanmanServer -StartupType Automatic -ErrorAction Stop
+    if($service.Status -ne 'Running'){Start-Service LanmanServer -ErrorAction Stop}
+    (Get-Service LanmanServer).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
+    $rules=@(
+        @{Name='AssistenteImpressoras-SMB-In';DisplayName='Assistente de Impressoras - compartilhamento SMB';Port='445';Program='Any'},
+        @{Name='AssistenteImpressoras-RPC-In';DisplayName='Assistente de Impressoras - endpoint RPC';Port='135';Program='Any'},
+        @{Name='AssistenteImpressoras-Spooler-In';DisplayName='Assistente de Impressoras - RPC do Spooler';Port='RPC';Program=(Join-Path $env:WINDIR 'System32\spoolsv.exe')}
+    )
+    foreach($rule in $rules){
+        $ruleParameters=@{Direction='Inbound';Action='Allow';Enabled='True';Profile='Any';Protocol='TCP';LocalPort=$rule.Port;Program=$rule.Program;RemoteAddress='Any';ErrorAction='Stop'}
+        $existing=Get-NetFirewallRule -Name $rule.Name -ErrorAction SilentlyContinue
+        if($existing){Set-NetFirewallRule -Name $rule.Name @ruleParameters | Out-Null}
+        else{New-NetFirewallRule -Name $rule.Name -DisplayName $rule.DisplayName @ruleParameters | Out-Null}
+        $verified=Get-NetFirewallRule -Name $rule.Name -ErrorAction Stop
+        if([string]$verified.Enabled -ne 'True' -or [string]$verified.Action -ne 'Allow'){throw 'Regra de compartilhamento não foi confirmada: '+$rule.Name}
+    }
+    if(-not(Test-PrinterLocalSMBListener)){throw 'O serviço SMB não abriu a porta 445 neste PC. Confira o serviço Servidor e o vínculo de compartilhamento no adaptador.'}
+    return @{Success=$true;EnabledAdapters=$changedAdapters;Message='Serviço Servidor, vínculo de compartilhamento e regras SMB/RPC preparados. A porta 445 local respondeu; o acesso a partir do outro PC ainda precisa ser conferido.'}
+}
+function Get-PrinterPolicyValue {
+    param([string]$Path,[string]$Name)
+    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($Path,$false)
+    try{
+        $exists=$key -and $key.GetValueNames() -contains $Name
+        return @{Path=$Path;Name=$Name;Exists=[bool]$exists;Value=$(if($exists){$key.GetValue($Name)}else{$null});Kind=$(if($exists){$key.GetValueKind($Name).ToString()}else{''})}
+    }finally{if($key){$key.Close()}}
+}
+function Set-PrinterPolicyValue {
+    param($State)
+    if($State.Exists){
+        $key=[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey($State.Path)
+        try{$kind=[Microsoft.Win32.RegistryValueKind][Enum]::Parse([Microsoft.Win32.RegistryValueKind],[string]$State.Kind);$key.SetValue($State.Name,$State.Value,$kind)}finally{$key.Close()}
+    }else{
+        $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($State.Path,$true)
+        try{if($key){$key.DeleteValue($State.Name,$false)}}finally{if($key){$key.Close()}}
+    }
+}
+function Restore-PrinterCompatibilityPolicies {
+    param([ValidateSet('Host','Client')][string]$Role,[string]$StateDirectory='')
+    Assert-PrinterAdmin
+    if(-not $StateDirectory){$StateDirectory=Join-Path $env:LOCALAPPDATA 'AssistenteImpressoras\Politicas'}
+    $plan=@(Get-PrinterCompatibilityPolicyEntries -Role $Role)
+    $snapshots=@()
+    foreach($file in @(Get-ChildItem -LiteralPath $StateDirectory -Filter ('Politicas_'+$Role+'_*.clixml') -File -ErrorAction SilentlyContinue)){
+        try{
+            $state=Import-Clixml -LiteralPath $file.FullName -ErrorAction Stop
+            if($state.Role -ne $Role -or @($state.Values).Count -ne $plan.Count){Write-Verbose ('Cópia incompleta em '+$file.Name+'; papel='+$state.Role+'; valores='+@($state.Values).Count+'; esperados='+$plan.Count);continue}
+            $seen=@();$valid=$true
+            foreach($value in @($state.Values)){
+                $entry=@($plan | Where-Object { $_.Path -ieq $value.Path -and $_.Name -ieq $value.Name })
+                $id=[string]$value.Path+'|'+[string]$value.Name
+                if($entry.Count -ne 1 -or $seen -icontains $id -or
+                    ($value.Exists -and $value.Kind -notin @('DWord','QWord','String','ExpandString','Binary','MultiString'))){Write-Verbose ('Entrada inválida em '+$file.Name+': '+$id+'; correspondências='+$entry.Count+'; existe='+$value.Exists+'; tipo='+$value.Kind);$valid=$false;break}
+                $seen+=$id
+            }
+            if($valid){Write-Verbose ('Cópia válida: '+$file.Name+'; data='+$state.Time);$snapshots+=@{State=$state;Path=$file.FullName;Time=[DateTime]$state.Time}}
+        }catch{Write-Verbose ('Cópia de políticas ignorada: '+$file.Name+'; '+$_.Exception.Message)}
+    }
+    $snapshot=$snapshots | Sort-Object { $_['Time'].Ticks } | Select-Object -First 1
+    if(-not $snapshot){throw 'Não há cópia anterior válida das políticas deste EXE neste usuário. Nenhuma configuração foi alterada.'}
+    $before=@();$changes=@();$skipped=0
+    foreach($original in @($snapshot.State.Values)){
+        $current=Get-PrinterPolicyValue -Path $original.Path -Name $original.Name
+        $before+=$current
+        if($current.Exists -eq $original.Exists -and (-not $current.Exists -or
+            ($current.Kind -eq $original.Kind -and ($current.Value -join '|') -eq ($original.Value -join '|')))){continue}
+        $applied=$plan | Where-Object { $_.Path -ieq $original.Path -and $_.Name -ieq $original.Name } | Select-Object -First 1
+        if(-not $current.Exists -or $current.Kind -ne 'DWord' -or $current.Value -ne $applied.Value){$skipped++;continue}
+        $changes+=$original
+    }
+    $backup=''
+    if($changes.Count){
+        $backup=Join-Path $StateDirectory ('AntesRestauracao_'+$Role+'_'+[Guid]::NewGuid().ToString('N')+'.clixml')
+        @{Role=$Role;Values=$before;Time=(Get-Date)} | Export-Clixml -LiteralPath $backup -Force
+        foreach($value in $changes){
+            Set-PrinterPolicyValue -State $value
+            $confirmed=Get-PrinterPolicyValue -Path $value.Path -Name $value.Name
+            if($confirmed.Exists -ne $value.Exists -or ($value.Exists -and
+                ($confirmed.Kind -ne $value.Kind -or ($confirmed.Value -join '|') -ne ($value.Value -join '|')))){throw 'O Windows não confirmou a restauração. Estado antes da operação: '+$backup}
+        }
+        if((Get-Service Spooler).Status -eq 'Running'){Restart-Service Spooler -Force -ErrorAction Stop}else{Start-Service Spooler -ErrorAction Stop}
+        (Get-Service Spooler).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
+    }
+    return @{Success=$true;Restored=$changes.Count;Skipped=$skipped;SnapshotPath=$snapshot.Path;StatePath=$backup;
+        Message="Políticas restauradas: $($changes.Count). Valores alterados depois por outra configuração e preservados: $skipped. Cópia utilizada: $($snapshot.Path). Filas, drivers e permissões de compartilhamento não são removidos."}
+}
+function Set-PrinterCompatibilityPolicies {
+    param([ValidateSet('Host','Client')][string]$Role,[string]$StateDirectory)
+    Assert-PrinterAdmin
+    $plan=@(Get-PrinterCompatibilityPolicyEntries -Role $Role)
     if(-not $StateDirectory){$StateDirectory=Join-Path $env:LOCALAPPDATA 'AssistenteImpressoras\Politicas'}
     [void][IO.Directory]::CreateDirectory($StateDirectory)
     $previous=@(); $changed=$false

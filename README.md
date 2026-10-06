@@ -2,11 +2,13 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.4**.
+Versão atual: **1.10.5**.
 
-A conexão executa uma cascata: conexão nativa, recebimento automático de pacote INF/driver pela rede e alternativa por porta local UNC. Confirma a fila no Windows e acompanha uma página de validação pelo JobId. Falha ou job pendente não gera repetição infinita nem sucesso falso.
+A conexão executa uma cascata: conexão nativa, recebimento automático de pacote INF/driver pela rede e alternativa por porta local UNC. Confirma a fila no Windows. A página de teste é opcional e acompanhada pelo JobId; um job pendente não é apresentado como falha de instalação da fila.
 
-No servidor, use **Impressoras locais → Preparar host e driver**. No cliente, selecione a fila e clique em **Conectar impressora**, deixando usuário e senha em branco para usar a sessão atual do Windows. Outra conta só é solicitada após recusa de acesso identificada. Uma conta já confirmada é reutilizada enquanto o aplicativo estiver aberto. O EXE pede elevação antes de coletar as credenciais. A preparação do host/cliente aplica as políticas de compatibilidade solicitadas e reinicia o Spooler.
+No servidor, use **Impressoras locais → Preparar host e driver**. No cliente, selecione a fila e clique em **Conectar impressora**, deixando usuário e senha em branco para usar a sessão atual do Windows. Outra conta é solicitada após recusa de acesso ou quando o compartilhamento de impressão foi confirmado e a cascata não instalou após 709/11b/bcb. Uma conta já confirmada é reutilizada enquanto o aplicativo estiver aberto. O EXE pede elevação antes de coletar as credenciais. Conectar não aplica políticas nem reinicia o Spooler; a preparação é uma ação explícita.
+
+**Impressoras locais → Preparar cliente / restaurar políticas** permite preparar o cliente ou restaurar as políticas de cliente/servidor a partir da primeira cópia válida salva pelo EXE. [Correção das regressões e comparação com 1.9.7](REGRESSAO_1.10.5.md).
 
 Na aba **Impressoras da rede**, escolha **Conectar por → Nome do computador (hostname)**, que é o padrão, ou **Endereço IP**. O caminho escolhido aparece ao lado. A mesma escolha é aplicada à autenticação, à conexão e à porta local.
 
@@ -49,4 +51,4 @@ Os testes cobrem sintaxe, conteúdo incorporado ao EXE, descoberta, autenticaç�
 
 Esta edição não inclui dados de atendimento, logs, drivers de fabricantes nem arquivos da máquina virtual de testes.
 
-Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.4.
+Consulte [Autenticação sob demanda](AUTENTICACAO.md) para o pedido de conta nos botões de conexão, driver e porta local, os testes e os limites da versão 1.10.5.

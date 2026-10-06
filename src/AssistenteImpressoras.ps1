@@ -1126,11 +1126,12 @@ function Offer-Win10LocalPortFallback {
 function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
-        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate')][string]$Method,
+        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate','RestoreClientPolicies','RestoreHostPolicies')][string]$Method,
         [int]$TimeoutSeconds = 25,
         [pscredential]$NetworkCredential,
         [string]$CredentialServer = '',
-        [string]$LocalPortRequestPath = '', [string]$AccessResource = ''
+        [string]$LocalPortRequestPath = '', [string]$AccessResource = '',
+        [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='QueueOnly'
     )
     $resultPath = ''
     $process = $null
@@ -1156,12 +1157,16 @@ function Invoke-BoundedPrinterAttempt {
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -RequestPath "{1}" -ResultPath "{2}"' -f $LocalPortInstallPath,$LocalPortRequestPath,$resultPath
             $executable = Join-Path $PSHOME 'powershell.exe'
-        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate')) {
+        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate','RestoreClientPolicies','RestoreHostPolicies')) {
             if (-not $PrinterConnectionPath -or -not (Test-Path -LiteralPath $PrinterConnectionPath)) {
                 return @{ Success=$false; Message='Rotina interna de conexão não encontrada no EXE.' }
             }
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -UNCPath "{1}" -ResultPath "{2}" -Method {3}' -f $PrinterConnectionPath,$UNCPath,$resultPath,$Method
+            if($Method -eq 'Cascade'){
+                $arguments += ' -ValidationMode '+$ValidationMode
+                if($NetworkCredential){$arguments += ' -HasNetworkCredential'}
+            }
             if($Method -eq 'Authenticate' -and $AccessResource){
                 if($AccessResource -match '["\x00-\x1f]'){return @{Success=$false;Code=87;Message='Recurso remoto inválido.'}}
                 $arguments += ' -AccessResource "'+$AccessResource+'"'
@@ -1218,7 +1223,7 @@ function Invoke-BoundedPrinterAttempt {
             Start-Sleep -Milliseconds 100
         }
         $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
-        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate')) {
+        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate','RestoreClientPolicies','RestoreHostPolicies')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
@@ -1238,24 +1243,29 @@ function Invoke-BoundedPrinterAttempt {
 }
 
 function Connect-UNCPrinterSafe {
-    param([string]$UNCPath,[string]$AlternateHost='')
+    param([string]$UNCPath,[string]$AlternateHost='',
+        [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='QueueOnly')
     if($global:SimulationMode){return @{Success=$true;Simulated=$true;Code=0;Message='Conexão simulada; nenhuma alteração ou job enviado.'}}
     $cleanUNC=$UNCPath.Trim()
     if(-not $cleanUNC.StartsWith('\\')){return @{Success=$false;Code=87;Message='Caminho UNC inválido.'}}
     $parts=$cleanUNC.Substring(2).Split([char]92)
     if($parts.Length -ne 2 -or -not $parts[0] -or -not $parts[1]){return @{Success=$false;Code=87;Message='Caminho UNC inválido.'}}
     $server=$parts[0]
-    if(-not(Test-TcpPortSafe -HostOrIp $server -Port 445 -TimeoutMs 1500)){return @{Success=$false;Code=53;Message='Servidor não responde em SMB 445.'}}
+    if(-not(Test-TcpPortSafe -HostOrIp $server -Port 445 -TimeoutMs 1500)){
+        $message="O computador $server não responde na porta SMB 445. Execute neste computador que compartilha a impressora: Impressoras locais > Preparar host e driver. Isso verifica os serviços e as regras de compartilhamento. Firewall de terceiros ou regras de domínio também podem impedir o acesso."
+        Write-AppLog -Message ("Conexão interrompida antes do Spooler: $cleanUNC; SMB 445 inacessível. "+$message) -Level ERRO
+        return @{Success=$false;Code=53;Stage='Verificar acesso SMB ao servidor';Resource=$cleanUNC;Message=$message}
+    }
     $credential=if($script:authenticatedPrinterServer -ieq $server){$script:authenticatedPrinterCredential}else{$null}
     Write-AppLog -Message "Iniciando cascata nativa/driver/porta local para $cleanUNC." -Level INFO
-    $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server
+    $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server -ValidationMode $ValidationMode
     foreach($step in @($attempt.History)){Write-AppLog -Message ([string]$step) -Level INFO}
     if($attempt.Cancelled){return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada; confira a fila antes de repetir.'}}
     if($attempt.TimedOut){return @{Success=$false;Code=1460;Cascaded=$true;Message=$attempt.Message}}
-    if($attempt.Success){
+    if($attempt.QueueInstalled -or $attempt.Success){
         $verified=Test-PrinterShareInstalled -UNCPath $cleanUNC -InstalledPrinters (Get-InstalledPrintersWmi)
         if(-not $attempt.QueueInstalled -or -not $verified){return @{Success=$false;Code=31;Cascaded=$true;Message='Worker terminou, mas a fila não foi confirmada neste usuário.'}}
-        Write-AppLog -Message $attempt.Message -Level SUCESSO
+        Write-AppLog -Message $attempt.Message -Level $(if($attempt.Success){'SUCESSO'}else{'AVISO'})
     }else{
         if(-not $attempt.Code){$attempt.Code=if($attempt.NativeCode){$attempt.NativeCode}else{31}}
         Write-AppLog -Message ("Falha da cascata: "+$attempt.Message) -Level ERRO
@@ -1265,9 +1275,10 @@ function Connect-UNCPrinterSafe {
 
 function Connect-PrinterUsingAvailableSession {
     param([string]$UNCPath, [string]$AlternateHost='', [scriptblock]$RequestCredential,
-        [string[]]$CredentialServerAliases=@())
+        [string[]]$CredentialServerAliases=@(),
+        [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='QueueOnly')
     return (Invoke-PrinterOperationUsingAvailableSession -UNCPath $UNCPath -CredentialServerAliases $CredentialServerAliases -RequestCredential $RequestCredential -Attempt {
-        Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost
+        Connect-UNCPrinterSafe -UNCPath $UNCPath -AlternateHost $AlternateHost -ValidationMode $ValidationMode
     })
 }
 
@@ -1515,7 +1526,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.4]"
+$form.Text = "Arrumar Impressora VG [v1.10.5]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -1925,7 +1936,7 @@ function Invoke-PrinterOperationUsingAvailableSession {
     $result = & $Attempt
     if ($result.Success -or $result.Simulated -or $result.QueueInstalled -or
         $result.Cancelled -or $result.TimedOut -or $result.Code -in @(1223,1460) -or -not $RequestCredential) { return $result }
-    $needsAccount = $result.NeedsAuthentication -or
+    $needsAccount = $result.NeedsAuthentication -or $result.CredentialRetryRecommended -or
         ($result.FailureScope -ne 'Local' -and $result.Code -in @(86,1244,1326,1327,1328,1329,1330,1331,1385,1907,1909,2202))
     if (-not $needsAccount) { return $result }
     Write-AppLog -Message "Acesso recusado em $server; etapa '$($result.Stage)', recurso '$($result.Resource)', código $($result.Code). Solicitando uma conta uma vez." -Level AVISO
@@ -1965,6 +1976,7 @@ function Invoke-PrinterOperationUsingAvailableSession {
 
 function Get-PrinterCredentialReason {
     param($Failure)
+    if($Failure.CredentialRetryRecommended){return "A fila $($Failure.ConfirmedUNC) existe, mas a sessão atual não concluiu a conexão de impressão. Tente uma conta desse computador servidor."}
     $resource=([string]$Failure.Resource -replace '[\r\n]',' ')
     if($resource.Length -gt 150){$resource=$resource.Substring(0,147)+'...'}
     $stage=if($Failure.Stage){[string]$Failure.Stage}else{'acessar impressora no servidor'}
@@ -2290,6 +2302,43 @@ $btnPublishDriver.Text = 'Preparar host e driver'
 $btnPublishDriver.Size = [System.Drawing.Size]::new(250, 30)
 $btnPublishDriver.Location = [System.Drawing.Point]::new(8, 44)
 $pnlPrintersTop.Controls.Add($btnPublishDriver)
+
+$btnCompatibilityRecovery = [System.Windows.Forms.Button]::new()
+$btnCompatibilityRecovery.Text = 'Preparar cliente / restaurar políticas'
+$btnCompatibilityRecovery.Size = [System.Drawing.Size]::new(290, 30)
+$btnCompatibilityRecovery.Location = [System.Drawing.Point]::new(268, 44)
+$btnCompatibilityRecovery.Add_Click({ Show-PrinterCompatibilityRecoveryDialog })
+$pnlPrintersTop.Controls.Add($btnCompatibilityRecovery)
+
+function Show-PrinterCompatibilityRecoveryDialog {
+    $dialog=[Windows.Forms.Form]::new()
+    $dialog.Text='Compatibilidade e recuperação neste computador'
+    $dialog.Size=[Drawing.Size]::new(480,260)
+    $dialog.StartPosition='CenterParent';$dialog.FormBorderStyle='FixedDialog'
+    $dialog.MaximizeBox=$false;$dialog.MinimizeBox=$false
+    $text=[Windows.Forms.Label]::new();$text.Location=[Drawing.Point]::new(16,14);$text.Size=[Drawing.Size]::new(435,88)
+    $text.Text="Cliente: este PC recebe uma impressora de outro computador.`nServidor: este PC compartilha a impressora.`nRestaurar utiliza a primeira cópia anterior válida das políticas deste EXE. Se houver mudanças, o Spooler será reiniciado. Filas e drivers são mantidos."
+    $dialog.Controls.Add($text)
+    $choice=[Windows.Forms.ComboBox]::new();$choice.Location=[Drawing.Point]::new(16,110);$choice.Size=[Drawing.Size]::new(435,25);$choice.DropDownStyle='DropDownList'
+    [void]$choice.Items.Add('Preparar políticas de cliente (compatibilidade)')
+    [void]$choice.Items.Add('Restaurar políticas de cliente')
+    [void]$choice.Items.Add('Restaurar políticas de servidor')
+    $choice.SelectedIndex=1;$dialog.Controls.Add($choice)
+    $apply=[Windows.Forms.Button]::new();$apply.Text='Executar';$apply.Location=[Drawing.Point]::new(16,155);$apply.Size=[Drawing.Size]::new(135,32);$apply.DialogResult='OK';$dialog.Controls.Add($apply)
+    $cancel=[Windows.Forms.Button]::new();$cancel.Text='Cancelar';$cancel.Location=[Drawing.Point]::new(316,155);$cancel.Size=[Drawing.Size]::new(135,32);$cancel.DialogResult='Cancel';$dialog.Controls.Add($cancel)
+    $dialog.AcceptButton=$apply;$dialog.CancelButton=$cancel
+    try{
+        if($dialog.ShowDialog($form) -ne [Windows.Forms.DialogResult]::OK){return}
+        if($global:SimulationMode){[Windows.Forms.MessageBox]::Show($form,'Simulação: nenhuma política será alterada.','Compatibilidade') | Out-Null;return}
+        $method=@('PrepareClient','RestoreClientPolicies','RestoreHostPolicies')[$choice.SelectedIndex]
+        $script:cancelPrinterConnection=$false
+        Show-LoadingIndicator -Message 'Executando a ação de compatibilidade selecionada...' -Button $btnCompatibilityRecovery
+        $result=Invoke-BoundedPrinterAttempt -UNCPath ('\\'+$env:COMPUTERNAME+'\Compatibilidade') -Method $method -TimeoutSeconds 90
+        Write-AppLog -Message ("Compatibilidade ($method): "+$result.Message) -Level $(if($result.Success){'SUCESSO'}else{'ERRO'})
+        [Windows.Forms.MessageBox]::Show($form,[string]$result.Message,'Compatibilidade') | Out-Null
+    }catch{Write-AppLog -Message $_.Exception.Message -Level ERRO;[Windows.Forms.MessageBox]::Show($form,$_.Exception.Message,'Compatibilidade') | Out-Null}
+    finally{$dialog.Dispose();Hide-LoadingIndicator -Button $btnCompatibilityRecovery}
+}
 
 $dgvPrinters = [System.Windows.Forms.DataGridView]::new()
 $dgvPrinters.Dock = [System.Windows.Forms.DockStyle]::Fill
@@ -3849,7 +3898,7 @@ $btnConnectSelected.Add_Click({
                 $btnCancelConnection.Visible = $true
             }
         }
-        $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount -CredentialServerAliases $target.Aliases
+        $result = Connect-PrinterUsingAvailableSession -UNCPath $unc -AlternateHost $alternateIp -RequestCredential $requestAccount -CredentialServerAliases $target.Aliases -ValidationMode $(if($chkNetTestPage.Checked){'TestPage'}else{'QueueOnly'})
         if ($script:authenticatedPrinterServer -ieq $serverForConnection -and $script:authenticatedPrinterUser) {
             $txtNetUser.Text = $script:authenticatedPrinterUser
         }
@@ -3871,7 +3920,7 @@ $btnConnectSelected.Add_Click({
         if ($chkNetDefault.Checked) {
             Set-DefaultPrinterSafe -PrinterName $connectedUNC | Out-Null
         }
-        if ($chkNetTestPage.Checked -and -not $result.JobValidated) {
+        if ($chkNetTestPage.Checked -and -not $result.JobValidationAttempted -and -not $result.JobValidated) {
             Invoke-PrintUICommand -Arguments ('/k /n "' + $connectedUNC + '"') | Out-Null
         }
 
@@ -3892,6 +3941,11 @@ $btnConnectSelected.Add_Click({
         if ($resp -eq [System.Windows.Forms.DialogResult]::Yes) {
             Invoke-PrintUICommand -Arguments ('/o /n "' + $connectedUNC + '"') -NoWait | Out-Null
         }
+    } elseif ($result.QueueInstalled) {
+        Refresh-PrintersGrid
+        $dgvNetPrinters.SelectedRows[0].Cells['Status'].Value='Instalada; teste de impressão pendente/falhou'
+        Update-StatusStrip -Text 'Fila instalada. O teste de impressão não foi concluído.' -Color 'DarkGoldenrod'
+        [System.Windows.Forms.MessageBox]::Show($form,"A fila foi instalada e confirmada no Windows.`n`n$($result.Message)`n`nNenhum novo job será enviado automaticamente.",'Fila instalada; verificar impressão',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
     } elseif ($result.Code -eq 1223) {
         Update-StatusStrip -Text 'Conexão cancelada.' -Color 'DarkGoldenrod'
     } elseif ($result.Code -eq 1797) {
@@ -4055,7 +4109,7 @@ $btnManualConnect.Add_Click({
         $btnCancelConnection.Enabled = $true
         $btnCancelConnection.Visible = $true
         Show-LoadingIndicator -Message "Conectando a $unc..." -Button $btnManualConnect
-        $res = Connect-PrinterUsingAvailableSession -UNCPath $unc -RequestCredential {
+        $res = Connect-PrinterUsingAvailableSession -UNCPath $unc -ValidationMode $(if($chkManualTest.Checked){'TestPage'}else{'QueueOnly'}) -RequestCredential {
             param($hostName,$failure)
             Request-PrinterServerCredential -Server $hostName -Parent $form -Reason (Get-PrinterCredentialReason $failure)
         }
@@ -4075,7 +4129,7 @@ $btnManualConnect.Add_Click({
         if ($res.Success) {
             $connectedUNC = if ($res.ConnectedUNC) { [string]$res.ConnectedUNC } else { $unc }
             if ($chkManualDefault.Checked) { Set-DefaultPrinterSafe -PrinterName $connectedUNC | Out-Null }
-            if ($chkManualTest.Checked) { Invoke-PrintUICommand -Arguments ('/k /n "' + $connectedUNC + '"') | Out-Null }
+            if ($chkManualTest.Checked -and -not $res.JobValidationAttempted -and -not $res.JobValidated) { Invoke-PrintUICommand -Arguments ('/k /n "' + $connectedUNC + '"') | Out-Null }
             Refresh-PrintersGrid
             Update-StatusStrip -Text "Impressora $connectedUNC conectada." -Color [System.Drawing.Color]::DarkGreen
             $successMessage = if ($res.LocalPort) {
@@ -4084,6 +4138,10 @@ $btnManualConnect.Add_Click({
                 "Impressora conectada com sucesso!`n`n$connectedUNC"
             }
             [System.Windows.Forms.MessageBox]::Show($successMessage, "Sucesso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        } elseif ($res.QueueInstalled) {
+            Refresh-PrintersGrid
+            Update-StatusStrip -Text 'Fila instalada. O teste de impressão não foi concluído.' -Color [Drawing.Color]::DarkGoldenrod
+            [System.Windows.Forms.MessageBox]::Show($form,"A fila foi instalada e confirmada no Windows.`n`n$($res.Message)`n`nNenhum novo job será enviado automaticamente.",'Fila instalada; verificar impressão',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         } elseif ($res.Code -eq 1223) {
             Update-StatusStrip -Text 'Conexão cancelada.' -Color [System.Drawing.Color]::DarkGoldenrod
         } elseif ($fallbackHandled) {

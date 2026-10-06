@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Arrumar Impressora VG")]
 [assembly: AssemblyDescription("Diagnostico e configuracao de impressoras")]
 [assembly: AssemblyProduct("Arrumar Impressora VG")]
-[assembly: AssemblyVersion("1.10.4.0")]
-[assembly: AssemblyFileVersion("1.10.4.0")]
+[assembly: AssemblyVersion("1.10.5.0")]
+[assembly: AssemblyFileVersion("1.10.5.0")]
 
 namespace AssistenteImpressorasLauncher
 {
