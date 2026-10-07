@@ -1,9 +1,9 @@
 ﻿param(
  [string]$UNCPath='', [string]$ResultPath='',
- [ValidateSet('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate','RestoreClientPolicies','RestoreHostPolicies')][string]$Method='Cascade',
+ [ValidateSet('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate','RestoreClientPolicies','RestoreHostPolicies','Operation')][string]$Method='Cascade',
  [string]$Server='', [string]$ShareName='', [string]$DriverName='',
  [ValidateSet('TestPage','QueueOnly')][string]$ValidationMode='QueueOnly',
- [switch]$SkipPolicyPreparation, [string]$StateDirectory='', [string]$AccessResource='', [switch]$HasNetworkCredential
+ [switch]$SkipPolicyPreparation, [string]$StateDirectory='', [string]$AccessResource='', [switch]$HasNetworkCredential,[string]$RequestPath=''
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'IMPRESSAO-COMUM.ps1')
@@ -37,7 +37,7 @@ function Complete-PrinterConnection {
   $completed.JobValidationAttempted=$true
   Write-ConnectionStage 'Validar job de teste identificado pelo JobId'
   try{
-   $delivery=Test-PrinterJobDelivery -QueueName $Printer.Name -Seconds 10
+   $delivery=Test-PrinterJobDelivery -QueueName $Printer.Name -UNCPath $UNCPath -Seconds 5 -CheckpointPath $ResultPath
    foreach($key in $delivery.Keys){$completed[$key]=$delivery[$key]}
   }catch{$completed.Success=$false;$completed.Message='Fila instalada, mas a validação do job falhou: '+$_.Exception.Message}
   if(-not $completed.Success){$completed.Code=if($completed.Pending){1460}else{31}}
@@ -45,7 +45,12 @@ function Complete-PrinterConnection {
  return $completed
 }
 try{
- if($Method -in @('RestoreClientPolicies','RestoreHostPolicies')){
+ if($Method -eq 'Operation'){
+  . (Join-Path $PSScriptRoot 'ATENDIMENTO-COMUM.ps1')
+  $request=Import-Clixml -LiteralPath $RequestPath -ErrorAction Stop
+  $currentStage='Atendimento: '+$request.Action
+  $result=Invoke-SupportWorkerOperation -Request $request -CheckpointPath $ResultPath
+ }elseif($Method -in @('RestoreClientPolicies','RestoreHostPolicies')){
   $result=Restore-PrinterCompatibilityPolicies -Role $(if($Method -eq 'RestoreClientPolicies'){'Client'}else{'Host'}) -StateDirectory $StateDirectory
  }elseif($Method -eq 'PrepareClient'){
   $result=& (Join-Path $PSScriptRoot 'DRIVER-DO-SERVIDOR.ps1') -Action PrepareClient -StateDirectory $StateDirectory
@@ -133,8 +138,8 @@ if($Method -eq 'Cascade'){
   }
  }
 }
-$result.WorkerVersion='1.10.9';$result.AttemptId=[Guid]::NewGuid().ToString('N')
+$result.WorkerVersion='1.11.0';$result.AttemptId=[Guid]::NewGuid().ToString('N')
 $result.History=@($history.ToArray());$result.Cascaded=($Method -eq 'Cascade')
 if(-not $ResultPath){return $result}
-try{$result | Export-Clixml -LiteralPath $ResultPath -Force -ErrorAction Stop}catch{exit 2}
+try{Save-PrinterWorkerResult -Result $result -Path $ResultPath}catch{exit 2}
 if($result.Success){exit 0}else{exit 1}

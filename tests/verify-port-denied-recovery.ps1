@@ -80,7 +80,7 @@ return @{Success=$true;DriverName='Fabricante Modelo';Existing=$true;FilesCompar
         }
         if($result.Success -or $result.QueueInstalled){throw 'O replay anunciou instalação inexistente.'}
         if($global:replayPromptCalls -ne $case.ExpectedPrompt -or $global:replayShareProbeCalls -ne $case.ExpectedShareCalls){throw ('Comportamento diferente do código revisado: '+$case.Name)}
-        if($result.WorkerVersion -ne '1.10.9' -or -not $result.AttemptId -or -not $result.NativeAttemptCodes){throw 'Metadados da tentativa ausentes'}
+        if($result.WorkerVersion -ne '1.11.0' -or -not $result.AttemptId -or -not $result.NativeAttemptCodes){throw 'Metadados da tentativa ausentes'}
         if($global:replayPortCalls -and ($result.Code -ne 5 -or $result.Stage -ne 'Criar porta local UNC')){throw 'A recuperação substituiu o erro original da porta'}
         if($case.ExpectedPrompt -and -not $result.NeedsAuthentication -and (-not $result.CredentialRetryRecommended -or $result.ConfirmedUNC -ne '\\LAB-HOST\Fila Teste')){throw 'Recuperação não corresponde ao compartilhamento selecionado'}
         [void]$reports.Add([pscustomobject]@{

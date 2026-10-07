@@ -2,7 +2,9 @@
 
 Assistente portátil para diagnosticar e configurar impressoras no Windows 10 e 11. Esta é a edição preparada para um repositório público, com oito abas e sem integração com sistemas de gestão privados.
 
-Versão atual: **1.10.9**.
+Versão atual: **1.11.0**.
+
+Novidades: testes de impressão com documento/JobId identificados e confirmação separada no cliente, servidor e papel; cancelamento de um documento ou limpeza de uma fila; validação RAW/LPR; manutenção com resultados por ação; diagnóstico JSON comparável entre PCs e exportação do atendimento atual em ZIP. [Uso e limites da entrega](ATENDIMENTO_1.11.0.md).
 
 Registro de driver legado ajustado para reutilizar arquivos locais idênticos, evitar cópia forçada, limitar erros transitórios 32/33 e confirmar os arquivos/cadastro antes de aceitar a instalação. [Correção de arquivo em uso e limites](ARQUIVO_DRIVER_EM_USO_1.10.9.md).
 

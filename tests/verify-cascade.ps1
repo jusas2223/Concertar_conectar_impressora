@@ -12,6 +12,7 @@ function Assert-PrinterAdmin {}
 function Test-PrinterSharedQueueExists {param($Server,$ShareName) if($global:scenario -eq 'missing-share'){return 2310};return 0}
 function Test-PrinterRemoteQueueAccess {param($UNCPath) if($global:scenario -eq 'port-denied'){return 5};return 0}
 function Submit-PrinterValidationPage {param($QueueName) $global:jobCalls++; return 42}
+function Get-PrinterRemoteJobObservation {param($UNCPath,$DocumentName) return @{Status='Queried';Observed=$false;Jobs=@()}}
 function Get-PrintJob {param($PrinterName,$ErrorAction)
  if($global:scenario -eq 'job-error'){return [pscustomobject]@{ID=42;JobStatus='Error'}}
  if($global:scenario -eq 'unrelated-job'){return [pscustomobject]@{ID=17;JobStatus='Error'}}
@@ -66,9 +67,9 @@ switch($Scenario){
  access {if($result.Success -or -not $result.NeedsAuthentication -or $result.Code -ne 5 -or $global:nativeCalls -ne 1 -or $global:driverCalls){throw 'Acesso negado iniciou instalação ou perdeu a indicação de conta'}}
  port-denied {if($result.Success -or -not $result.NeedsAuthentication -or $result.Stage -ne 'Criar porta local UNC' -or $global:jobCalls){throw 'Porta negada foi aceita ou perdeu a indicação de conta'}}
  job-error {if($result.Success -or -not $result.QueueInstalled -or $global:nativeCalls -ne 1 -or $global:driverCalls -or $global:jobCalls -ne 1){throw 'Job em erro foi aceito/reenviado'}}
- unrelated-job {if(-not $result.Success -or $result.QueueClean -or -not $result.JobValidated){throw 'Outro job alterou a validação do job de teste'}}
+ unrelated-job {if(-not $result.Success -or $result.QueueClean -or $result.JobValidated -or -not $result.JobAccepted){throw 'Outro job alterou a aceitação do job de teste'}}
 }
-if($result.Success -and (-not $result.QueueInstalled -or ($mode -eq 'TestPage' -and -not $result.JobValidated) -or $result.PhysicalPrintConfirmed)){throw 'Validação falsa'}
+if($result.Success -and (-not $result.QueueInstalled -or ($mode -eq 'TestPage' -and -not $result.JobAccepted) -or $result.PhysicalPrintConfirmed)){throw 'Validação falsa'}
 if($mode -eq 'QueueOnly' -and $global:jobCalls){throw 'Conectar enviou teste automático'}
 '@,$utf8)
     foreach($case in @('native','inject','local','missing','credential-hint','missing-share','access','driver-denied','port-denied','job-error','unrelated-job')){

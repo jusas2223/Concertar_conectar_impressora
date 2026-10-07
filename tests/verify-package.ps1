@@ -12,12 +12,14 @@ $scripts = @(
     @{ Path = (Join-Path $root 'src\scripts\DRIVER-DO-SERVIDOR.ps1'); Resource = 'AssistenteImpressoras.DRIVER-DO-SERVIDOR.ps1' },
     @{ Path = (Join-Path $root 'src\scripts\IMPRESSAO-COMUM.ps1'); Resource = 'AssistenteImpressoras.IMPRESSAO-COMUM.ps1' },
     @{ Path = (Join-Path $root 'src\scripts\INTERFACE.ps1'); Resource = 'AssistenteImpressoras.INTERFACE.ps1' },
+    @{ Path = (Join-Path $root 'src\scripts\ATENDIMENTO-COMUM.ps1'); Resource = 'AssistenteImpressoras.ATENDIMENTO-COMUM.ps1' },
+    @{ Path = (Join-Path $root 'src\scripts\ATENDIMENTO-INTERFACE.ps1'); Resource = 'AssistenteImpressoras.ATENDIMENTO-INTERFACE.ps1' },
     @{ Path = (Join-Path $root 'Diagnostico_Compartilhamento.ps1'); Resource = 'AssistenteImpressoras.Diagnostico_Compartilhamento.ps1' }
 )
 
 if (-not (Test-Path -LiteralPath $exePath)) { throw 'Compile o EXE antes deste teste.' }
 $assembly = [Reflection.Assembly]::LoadFile($exePath)
-if ($assembly.GetName().Version.ToString() -ne '1.10.9.0') { throw 'Versao do EXE incorreta.' }
+if ($assembly.GetName().Version.ToString() -ne '1.11.0.0') { throw 'Versao do EXE incorreta.' }
 $mainSource=[IO.File]::ReadAllText($scripts[0].Path)
 $logVersion=[regex]::Match($mainSource,'Versão do app: ([0-9.]+) \|')
 if(-not $logVersion.Success -or $logVersion.Groups[1].Value -ne $assembly.GetName().Version.ToString(3)){throw 'Versão do cabeçalho do log diverge do EXE.'}
@@ -57,4 +59,4 @@ try {
     if ([IO.Directory]::Exists($tempDirectory)) { [IO.Directory]::Delete($tempDirectory) }
 }
 
-Write-Output 'OK: versão, script principal, dez rotinas incorporadas e chamada com caminho contendo espaços.'
+Write-Output 'OK: versão, script principal, scripts incorporados e chamada com caminho contendo espaços.'

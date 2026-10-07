@@ -357,7 +357,7 @@ function Invoke-PrinterPnPInstall {
     return @{Success=$true;DriverName=$driver.Name;MajorVersion=$driver.MajorVersion;RebootRequired=$reboot;Message="Driver '$DriverName' confirmado no Spooler.";PnPOutput=($output -join "`n")}
 }
 function Submit-PrinterValidationPage {
-    param([string]$QueueName)
+    param([string]$QueueName,[string]$DocumentName=('Assistente - teste '+[Guid]::NewGuid().ToString('N')))
     if(-not ('PrinterValidationGdi' -as [type])){
         Add-Type -TypeDefinition @'
 using System;
@@ -374,31 +374,109 @@ public static class PrinterValidationGdi {
  [DllImport("gdi32.dll",SetLastError=true)] static extern int AbortDoc(IntPtr dc);
  [DllImport("gdi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool TextOutW(IntPtr dc,int x,int y,string text,int length);
  static void Check(int status){if(status<=0)throw new Win32Exception(Marshal.GetLastWin32Error(),"O driver recusou a página de validação.");}
- public static int Send(string queue){IntPtr dc=CreateDCW("WINSPOOL",queue,null,IntPtr.Zero);if(dc==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());bool active=false;
-  try{var info=new DOCINFO();info.cbSize=Marshal.SizeOf(info);info.name="Assistente - validacao "+Guid.NewGuid().ToString("N");int id=StartDocW(dc,ref info);Check(id);active=true;Check(StartPage(dc));string text="Teste de impressao - Assistente de Impressoras";
+ public static int Send(string queue,string document){IntPtr dc=CreateDCW("WINSPOOL",queue,null,IntPtr.Zero);if(dc==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());bool active=false;
+  try{var info=new DOCINFO();info.cbSize=Marshal.SizeOf(info);info.name=document;int id=StartDocW(dc,ref info);Check(id);active=true;Check(StartPage(dc));string text="Teste de impressao - Assistente de Impressoras";
    if(!TextOutW(dc,10,10,text,text.Length))throw new Win32Exception(Marshal.GetLastWin32Error());Check(EndPage(dc));Check(EndDoc(dc));active=false;return id;
   }finally{if(active)AbortDoc(dc);DeleteDC(dc);}
  }
 }
 '@ -ErrorAction Stop
     }
-    return [PrinterValidationGdi]::Send($QueueName)
+    return [PrinterValidationGdi]::Send($QueueName,$DocumentName)
+}
+function Initialize-PrinterJobNative {
+    if('PrinterJobNative' -as [type]){return}
+    Add-Type -TypeDefinition @'
+using System;using System.Collections.Generic;using System.ComponentModel;using System.Runtime.InteropServices;
+public static class PrinterJobNative {
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct DOC { public string Name,Output,DataType; }
+ [StructLayout(LayoutKind.Sequential)] public struct TIME { public ushort Year,Month,DayOfWeek,Day,Hour,Minute,Second,Milliseconds; }
+ [StructLayout(LayoutKind.Sequential)] struct JOB { public uint Id;public IntPtr Printer,Machine,User,Document,DataType,TextStatus;public uint Status,Priority,Position,TotalPages,PagesPrinted;public TIME Submitted; }
+ public sealed class Observation { public int Id;public string Document,Owner,StatusText;public uint Status; }
+ [DllImport("winspool.drv",EntryPoint="OpenPrinterW",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Open(string name,out IntPtr handle,IntPtr defaults);
+ [DllImport("winspool.drv",EntryPoint="ClosePrinter",SetLastError=true)] static extern bool Close(IntPtr handle);
+ [DllImport("winspool.drv",EntryPoint="StartDocPrinterW",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint Start(IntPtr handle,uint level,ref DOC doc);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool StartPagePrinter(IntPtr handle);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool EndPagePrinter(IntPtr handle);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool EndDocPrinter(IntPtr handle);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool AbortPrinter(IntPtr handle);
+ [DllImport("winspool.drv",SetLastError=true)] static extern bool WritePrinter(IntPtr handle,byte[] data,uint count,out uint written);
+ [DllImport("winspool.drv",EntryPoint="EnumJobsW",SetLastError=true)] static extern bool Enum(IntPtr handle,uint first,uint count,uint level,IntPtr buffer,uint size,out uint needed,out uint returned);
+ static void Check(bool ok){if(!ok)throw new Win32Exception(Marshal.GetLastWin32Error());}
+ public static int SendRaw(string queue,string name,byte[] bytes){IntPtr h;Check(Open(queue,out h,IntPtr.Zero));bool active=false;
+  try{DOC d=new DOC();d.Name=name;d.DataType="RAW";uint id=Start(h,1,ref d);if(id==0)throw new Win32Exception(Marshal.GetLastWin32Error());active=true;Check(StartPagePrinter(h));uint written;Check(WritePrinter(h,bytes,(uint)bytes.Length,out written));if(written!=(uint)bytes.Length)throw new Win32Exception(29,"Envio RAW incompleto.");Check(EndPagePrinter(h));Check(EndDocPrinter(h));active=false;return checked((int)id);}finally{if(active)AbortPrinter(h);Close(h);}}
+ public static Observation[] Find(string path,string document){IntPtr h;Check(Open(path,out h,IntPtr.Zero));IntPtr buffer=IntPtr.Zero;
+  try{uint needed,count;bool ok=Enum(h,0,512,1,IntPtr.Zero,0,out needed,out count);if(!ok&&Marshal.GetLastWin32Error()!=122)throw new Win32Exception(Marshal.GetLastWin32Error());if(needed==0)return new Observation[0];if(needed>4194304)throw new Win32Exception(8);buffer=Marshal.AllocHGlobal(checked((int)needed));Check(Enum(h,0,512,1,buffer,needed,out needed,out count));var result=new List<Observation>();int size=Marshal.SizeOf(typeof(JOB));for(uint i=0;i<count;i++){JOB j=(JOB)Marshal.PtrToStructure(IntPtr.Add(buffer,checked((int)i*size)),typeof(JOB));string name=Marshal.PtrToStringUni(j.Document);if(String.Equals(name,document,StringComparison.Ordinal)){var o=new Observation();o.Id=checked((int)j.Id);o.Document=name;o.Owner=Marshal.PtrToStringUni(j.User);o.Status=j.Status;o.StatusText=Marshal.PtrToStringUni(j.TextStatus);result.Add(o);}}return result.ToArray();}finally{if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);Close(h);}}
+}
+'@ -ErrorAction Stop
+}
+function Get-PrinterRemoteJobObservation {
+    param([string]$UNCPath,[string]$DocumentName,[int]$TimeoutMilliseconds=6500)
+    if($UNCPath -notmatch '^\\\\[^\\]+\\[^\\]+$'){return @{Status='NotApplicable';Observed=$false}}
+    $root=Join-Path $env:TEMP ('PrinterJobProbe_'+[Guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($root);$process=$null
+    try{
+        $request=Join-Path $root 'request.xml';$answer=Join-Path $root 'answer.xml';$worker=Join-Path $root 'probe.ps1'
+        @{UNCPath=$UNCPath;DocumentName=$DocumentName;CommonPath=(Join-Path $PSScriptRoot 'IMPRESSAO-COMUM.ps1');Answer=$answer}|Export-Clixml -LiteralPath $request
+        [IO.File]::WriteAllText($worker,@'
+param([string]$RequestPath)
+$r=Import-Clixml -LiteralPath $RequestPath
+try{. $r.CommonPath;Initialize-PrinterJobNative;$jobs=@([PrinterJobNative]::Find($r.UNCPath,$r.DocumentName));$result=@{Status='Queried';Observed=($jobs.Count -gt 0);Jobs=@($jobs|ForEach-Object {@{JobId=$_.Id;DocumentName=$_.Document;Owner=$_.Owner;Status=$_.Status;StatusText=$_.StatusText}})}}catch{$result=@{Status='Unavailable';Observed=$false;Code=$_.Exception.GetBaseException().NativeErrorCode;Message=$_.Exception.GetBaseException().Message}}
+$result|Export-Clixml -LiteralPath $r.Answer
+'@,[Text.UTF8Encoding]::new($true))
+        $process=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$worker+'" -RequestPath "'+$request+'"') -WindowStyle Hidden -PassThru -ErrorAction Stop
+        if(-not $process.WaitForExit($TimeoutMilliseconds)){$process.Kill();[void]$process.WaitForExit(1500);return @{Status='TimedOut';Observed=$false;Message='Consulta ao servidor excedeu o prazo; recebimento inconclusivo.'}}
+        if(-not(Test-Path -LiteralPath $answer)){return @{Status='Unavailable';Observed=$false;Message='Consulta sem resultado.'}}
+        return (Import-Clixml -LiteralPath $answer)
+    }catch{return @{Status='Unavailable';Observed=$false;Message=$_.Exception.Message}}
+    finally{if($process){$process.Dispose()};if([IO.Path]::GetFullPath($root).StartsWith([IO.Path]::GetFullPath($env:TEMP)+'\',[StringComparison]::OrdinalIgnoreCase)){Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue}}
+}
+function Save-PrinterWorkerResult {
+    param([Collections.IDictionary]$Result,[string]$Path)
+    $temporary=$Path+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'
+    try{
+        $Result|Export-Clixml -LiteralPath $temporary -Force -ErrorAction Stop
+        if(Test-Path -LiteralPath $Path){[IO.File]::Replace($temporary,$Path,$null)}else{[IO.File]::Move($temporary,$Path)}
+    }finally{Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue}
 }
 function Test-PrinterJobDelivery {
-    param([string]$QueueName,[int]$Seconds=10)
-    $jobId=Submit-PrinterValidationPage -QueueName $QueueName
-    if($jobId -le 0){throw 'Nenhum JobId de validação foi retornado pelo Spooler.'}
-    $clock=[Diagnostics.Stopwatch]::StartNew(); $observed=$false
-    do {
-        $jobs=@(Get-PrintJob -PrinterName $QueueName -ErrorAction Stop)
-        $job=$jobs | Where-Object ID -eq $jobId | Select-Object -First 1
-        if(-not $job){return @{Success=$true;JobId=$jobId;JobValidated=$true;QueueClean=($jobs.Count -eq 0);JobObserved=$observed;PhysicalPrintConfirmed=$false;Message='O Spooler aceitou o job e ele saiu da fila do cliente; isso não comprova saída no papel.'}}
-        $observed=$true
-        if([string]$job.JobStatus -match 'Error|Retry|Offline|PaperOut|Blocked|Deleted'){
-            return @{Success=$false;JobId=$jobId;JobValidated=$false;Message="Job $jobId com status $($job.JobStatus)."}
-        }
-        if($clock.Elapsed.TotalSeconds -ge $Seconds){break}
-        Start-Sleep -Milliseconds 250
-    }while($true)
-    return @{Success=$false;Pending=$true;JobId=$jobId;JobValidated=$false;Message="Fila instalada, mas o job $jobId permanece pendente após $Seconds segundos. Não reenviado."}
+    param([string]$QueueName,[int]$Seconds=10,[string]$UNCPath='',[int]$JobId=0,[string]$DocumentName='',
+        [byte[]]$RawBytes,[string]$CheckpointPath='')
+    if(-not $DocumentName){$DocumentName='Assistente - teste '+[Guid]::NewGuid().ToString('N')}
+    $submitted=Get-Date
+    if($JobId -le 0){
+        if($RawBytes){Initialize-PrinterJobNative;$JobId=[PrinterJobNative]::SendRaw($QueueName,$DocumentName,$RawBytes)}
+        else{$JobId=Submit-PrinterValidationPage -QueueName $QueueName -DocumentName $DocumentName}
+    }
+    if($JobId -le 0){throw 'Nenhum JobId foi retornado pelo Spooler.'}
+    $result=@{Success=$true;QueueInstalled=$true;QueueName=$QueueName;PortUNC=$UNCPath;JobId=$JobId;DocumentName=$DocumentName;SubmittedAt=$submitted.ToString('o');
+        JobAccepted=$true;JobValidated=$false;JobValidationAttempted=$true;JobObserved=$false;PhysicalPrintConfirmed=$false;
+        ServerJobObserved=$false;ServerObservation='NotApplicable';JobState='Accepted';Message='Documento aceito pelo Spooler; entrega ainda não confirmada.'}
+    if($CheckpointPath){Save-PrinterWorkerResult -Result $result -Path $CheckpointPath}
+    $clock=[Diagnostics.Stopwatch]::StartNew();$jobs=@();$localAbsent=$false
+    try{
+        do{
+            $jobs=@(Get-PrintJob -PrinterName $QueueName -ErrorAction Stop)
+            $job=$jobs|Where-Object ID -eq $JobId|Select-Object -First 1
+            if(-not $job){$localAbsent=$true;break}
+            $result.JobObserved=$true;$result.JobStatus=[string]$job.JobStatus
+            if($result.JobStatus -match 'Error|Retry|Offline|PaperOut|Blocked|Delet'){$result.Success=$false;$result.JobState='Error';$result.Message="Documento $JobId com estado $($job.JobStatus); não reenviado.";break}
+            if($clock.Elapsed.TotalSeconds -ge $Seconds){$result.Success=$false;$result.Pending=$true;$result.JobState='Pending';$result.Message="Documento $JobId permanece na fila do cliente; não reenviado.";break}
+            Start-Sleep -Milliseconds 250
+        }while($true)
+        $result.QueueClean=($jobs.Count -eq 0)
+        if($localAbsent){$result.JobValidated=[bool]$result.JobObserved;$result.JobState=if($result.JobObserved){'LeftClientQueue'}else{'AcceptedNotObserved'};$result.Message=if($result.JobObserved){'Documento deixou a fila do cliente. Isso não confirma recebimento no servidor nem saída no papel.'}else{'Spooler aceitou o documento, mas ele não foi observado na consulta. Entrega inconclusiva.'}}
+    }catch{$result.Success=$false;$result.JobState='ObservationUnavailable';$result.Message='Documento aceito; consulta da fila indisponível: '+$_.Exception.Message}
+    if(-not $UNCPath -and $QueueName -match '^\\\\'){$UNCPath=$QueueName}
+    if($UNCPath){
+        $remote=Get-PrinterRemoteJobObservation -UNCPath $UNCPath -DocumentName $DocumentName
+        $result.ServerObservation=$remote.Status;$result.ServerJobObserved=[bool]$remote.Observed;$result.ServerJobs=@($remote.Jobs)
+        if($remote.Code){$result.ServerObservationCode=$remote.Code}
+        if($remote.Observed){
+            $result.Message+=' Documento observado no servidor.'
+            if(@($remote.Jobs|Where-Object {([int]$_.Status -band 0x767) -ne 0}).Count){$result.Success=$false;$result.JobState='ServerError';$result.Message+=' Servidor informa erro, pausa, exclusão ou intervenção.'}
+        }elseif($remote.Status -eq 'Queried'){$result.Message+=' Documento não observado no servidor nessa consulta.'}
+        elseif($remote.Status -ne 'NotApplicable'){$result.Message+=' Consulta ao servidor indisponível; recebimento inconclusivo.'}
+    }
+    return $result
 }

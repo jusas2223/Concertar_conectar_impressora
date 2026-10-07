@@ -113,10 +113,13 @@ function Write-AppLog {
     }
 }
 
+$supportInterfacePath=if($PrinterConnectionPath){Join-Path (Split-Path -Parent $PrinterConnectionPath) 'ATENDIMENTO-INTERFACE.ps1'}else{Join-Path $PSScriptRoot 'scripts\ATENDIMENTO-INTERFACE.ps1'}
+if(Test-Path -LiteralPath $supportInterfacePath){. $supportInterfacePath}
+
 # Inicializar cabeçalho do arquivo de log
 Write-AppLog -Message "================================================================================" -Level "INFO"
 Write-AppLog -Message "Início de Atendimento - Assistente de Impressoras (Suporte Técnico)" -Level "INFO"
-Write-AppLog -Message "Versão do app: 1.10.9 | PowerShell: $($PSVersionTable.PSVersion) | Processo: $([IntPtr]::Size * 8) bits" -Level "INFO"
+Write-AppLog -Message "Versão do app: 1.11.0 | PowerShell: $($PSVersionTable.PSVersion) | Processo: $([IntPtr]::Size * 8) bits" -Level "INFO"
 Write-AppLog -Message "Computador: $env:COMPUTERNAME | Usuário: $env:USERNAME | Data: $((Get-Date).ToString())" -Level "INFO"
 Write-AppLog -Message "Arquivo de Log: $global:LogFilePath" -Level "INFO"
 Write-AppLog -Message "================================================================================" -Level "INFO"
@@ -918,8 +921,6 @@ function Show-LocalPortFallbackDialog {
     foreach ($driverName in @(Get-InstalledDriversSafe)) { [void]$cmbDriver.Items.Add([string]$driverName) }
     if ($SuggestedDriverName) {
         $cmbDriver.Text = $SuggestedDriverName
-    } elseif ($share -ieq 'MP' -and $cmbDriver.Items.Contains('MP-4200 TH')) {
-        $cmbDriver.Text = 'MP-4200 TH'
     }
     $dialog.Controls.Add($cmbDriver)
     $btnRefreshDrivers = [System.Windows.Forms.Button]::new()
@@ -1095,12 +1096,7 @@ function Show-LocalPortFallbackDialog {
         }
         if (-not $inf -and -not (@(Get-InstalledDriversSafe) -icontains $driver)) {
             $message = "O driver '$driver' não está instalado neste computador.`n`nInstale primeiro o driver oficial compatível com este Windows, clique em 'Atualizar drivers' e tente novamente."
-            if ($share -ieq 'MP' -and $driver -ieq 'MP-4200 TH') {
-                $officialInstaller = Join-Path $ScriptDir 'Drivers\MP4200TH_v5\Spooler_Bematech\BematechSpoolerDrivers_x64_v5.0.0.4.exe'
-                if (Test-Path -LiteralPath $officialInstaller -PathType Leaf) {
-                    $message += "`n`nInstalador x64 do fabricante incluído na pasta:`n$officialInstaller"
-                }
-            }
+
             $status.ForeColor = [System.Drawing.Color]::DarkRed
             $status.Text = "Driver '$driver' ausente neste PC."
             [System.Windows.Forms.MessageBox]::Show($dialog, $message, 'Driver necessário', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
@@ -1151,7 +1147,7 @@ function Offer-Win10LocalPortFallback {
 function Invoke-BoundedPrinterAttempt {
     param(
         [string]$UNCPath,
-        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate','RestoreClientPolicies','RestoreHostPolicies')][string]$Method,
+        [ValidateSet('Cascade','AddPrinter','WScript','PrintUI','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate','RestoreClientPolicies','RestoreHostPolicies','Operation')][string]$Method,
         [int]$TimeoutSeconds = 25,
         [pscredential]$NetworkCredential,
         [string]$CredentialServer = '',
@@ -1182,12 +1178,16 @@ function Invoke-BoundedPrinterAttempt {
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -RequestPath "{1}" -ResultPath "{2}"' -f $LocalPortInstallPath,$LocalPortRequestPath,$resultPath
             $executable = Join-Path $PSHOME 'powershell.exe'
-        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate','RestoreClientPolicies','RestoreHostPolicies')) {
+        } elseif ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','Authenticate','RestoreClientPolicies','RestoreHostPolicies','Operation')) {
             if (-not $PrinterConnectionPath -or -not (Test-Path -LiteralPath $PrinterConnectionPath)) {
                 return @{ Success=$false; Message='Rotina interna de conexão não encontrada no EXE.' }
             }
             $resultPath = Join-Path $env:TEMP ('PrinterConnect_' + [Guid]::NewGuid().ToString('N') + '.xml')
             $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -UNCPath "{1}" -ResultPath "{2}" -Method {3}' -f $PrinterConnectionPath,$UNCPath,$resultPath,$Method
+            if($Method -eq 'Operation'){
+                if(-not $LocalPortRequestPath -or -not(Test-Path -LiteralPath $LocalPortRequestPath) -or $LocalPortRequestPath -match '"'){throw 'Dados de atendimento ausentes ou inválidos.'}
+                $arguments += ' -RequestPath "'+$LocalPortRequestPath+'"'
+            }
             if($Method -eq 'Cascade'){
                 $arguments += ' -ValidationMode '+$ValidationMode
                 if($NetworkCredential){$arguments += ' -HasNetworkCredential'}
@@ -1230,7 +1230,12 @@ function Invoke-BoundedPrinterAttempt {
                     if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1223) }
                     else { $process.Kill(); [void]$process.WaitForExit(2000) }
                 } catch {}
-                return @{ Success=$false; Cancelled=$true; Message='Conexão cancelada pelo usuário.' }
+                if($resultPath -and (Test-Path -LiteralPath $resultPath)){
+                    $partial=Import-Clixml -LiteralPath $resultPath -ErrorAction Stop
+                    $partial.Success=$false;$partial.Cancelled=$true;$partial.Message+=' Acompanhamento cancelado; não reenviar sem conferir a fila.'
+                    return $partial
+                }
+                return @{ Success=$false; Cancelled=$true; Message='Operação cancelada pelo usuário.' }
             }
             if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
                 $stageMessage = ''
@@ -1242,13 +1247,18 @@ function Invoke-BoundedPrinterAttempt {
                     if ($nativeProcess) { [void][PrinterNetOnlyProcess]::TerminateProcess($nativeProcess.hProcess,1460) }
                     else { $process.Kill(); [void]$process.WaitForExit(2000) }
                 } catch {}
+                if($resultPath -and (Test-Path -LiteralPath $resultPath)){
+                    $partial=Import-Clixml -LiteralPath $resultPath -ErrorAction Stop
+                    $partial.Success=$false;$partial.TimedOut=$true;$partial.Message+=' Acompanhamento interrompido pelo prazo; não reenviar sem conferir a fila.'
+                    return $partial
+                }
                 return @{ Success=$false; TimedOut=$true; Message="A tentativa $Method excedeu $TimeoutSeconds segundos e foi interrompida.$stageMessage" }
             }
             [System.Windows.Forms.Application]::DoEvents()
             Start-Sleep -Milliseconds 100
         }
         $exitCode = if ($nativeProcess) { $nativeExit = [uint32]0; [void][PrinterNetOnlyProcess]::GetExitCodeProcess($nativeProcess.hProcess,[ref]$nativeExit); $nativeExit } else { $process.ExitCode }
-        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate','RestoreClientPolicies','RestoreHostPolicies')) {
+        if ($Method -in @('Cascade','AddPrinter','WScript','PublishDriver','InstallDriver','PrepareHost','PrepareClient','LocalPort','Authenticate','RestoreClientPolicies','RestoreHostPolicies','Operation')) {
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 return @{ Success=$false; Message="$Method terminou com código $exitCode, sem resultado." }
             }
@@ -1284,6 +1294,8 @@ function Connect-UNCPrinterSafe {
     $credential=if($script:authenticatedPrinterServer -ieq $server){$script:authenticatedPrinterCredential}else{$null}
     Write-AppLog -Message "Iniciando cascata nativa/driver/porta local para $cleanUNC." -Level INFO
     $attempt=Invoke-BoundedPrinterAttempt -UNCPath $cleanUNC -Method Cascade -TimeoutSeconds 180 -NetworkCredential $credential -CredentialServer $server -ValidationMode $ValidationMode
+    $attempt.IdentityMode=if($credential){'Conta alternativa informada'}else{'Sessão atual do Windows'}
+    $attempt.NetworkUser=if($credential){$credential.UserName}else{[Security.Principal.WindowsIdentity]::GetCurrent().Name}
     foreach($step in @($attempt.History)){if(-not [string]::IsNullOrWhiteSpace([string]$step)){Write-AppLog -Message ([string]$step) -Level INFO}}
     $diagnostic=@("Destino=$cleanUNC")
     foreach($field in @('AttemptId','WorkerVersion','Success','QueueInstalled','Stage','Code','NativeCode','FailureScope','NativeConnectionCode','RemoteAccessCode','ShareLookupCode','AuthenticationCode','RecoveryReason','CredentialRetryRecommended','NeedsAuthentication','DriverName','DriverConfirmed','DriverAvailability','DriverQueryCode','InfLookupCode','InfLookupStage','PreparedPackageFound','PortMethod','RegistrationAttempts','CopyPolicy')){
@@ -1292,16 +1304,24 @@ function Connect-UNCPrinterSafe {
     if($attempt.ContainsKey('NativeAttemptCodes')){$diagnostic+=('NativeAttemptCodes='+(@($attempt.NativeAttemptCodes) -join ','))}
     if($attempt.DriverFiles){$diagnostic+=('DriverFiles='+($attempt.DriverFiles -join '; '))}
     Write-AppLog -Message ('Resultado da conexão: '+($diagnostic -join ' | ')) -Level INFO
-    if($attempt.Cancelled){return @{Success=$false;Code=1223;Cascaded=$true;Message='Conexão cancelada; confira a fila antes de repetir.'}}
-    if($attempt.TimedOut){return @{Success=$false;Code=1460;Cascaded=$true;Message=$attempt.Message}}
+    if($attempt.Cancelled -or $attempt.TimedOut){
+        $attempt.Code=if($attempt.Cancelled){1223}else{1460};$attempt.Cascaded=$true
+        if(Get-Command Save-PrinterSupportRecord -ErrorAction SilentlyContinue){Save-PrinterSupportRecord -Action 'Connection' -Destination $cleanUNC -Result $attempt}
+        return $attempt
+    }
     if($attempt.QueueInstalled -or $attempt.Success){
         $verified=Test-PrinterShareInstalled -UNCPath $cleanUNC -InstalledPrinters (Get-InstalledPrintersWmi)
-        if(-not $attempt.QueueInstalled -or -not $verified){return @{Success=$false;Code=31;Cascaded=$true;Message='Worker terminou, mas a fila não foi confirmada neste usuário.'}}
+        if(-not $attempt.QueueInstalled -or -not $verified){
+            $attempt.Success=$false;$attempt.QueueInstalled=$false;$attempt.Code=31;$attempt.Cascaded=$true;$attempt.Message='Worker terminou, mas a fila não foi confirmada neste usuário.'
+            if(Get-Command Save-PrinterSupportRecord -ErrorAction SilentlyContinue){Save-PrinterSupportRecord -Action 'Connection' -Destination $cleanUNC -Result $attempt}
+            return $attempt
+        }
         Write-AppLog -Message $attempt.Message -Level $(if($attempt.Success){'SUCESSO'}else{'AVISO'})
     }else{
         if(-not $attempt.Code){$attempt.Code=if($attempt.NativeCode){$attempt.NativeCode}else{31}}
         Write-AppLog -Message ("Falha da cascata: "+$attempt.Message) -Level ERRO
     }
+    if(Get-Command Save-PrinterSupportRecord -ErrorAction SilentlyContinue){Save-PrinterSupportRecord -Action 'Connection' -Destination $cleanUNC -Result $attempt}
     return $attempt
 }
 
@@ -1348,77 +1368,14 @@ function Ensure-RemotePrinterConnectedAndDriverInstalled {
 
 # Criar Porta de Impressora TCP/IP nativa via WMI (sem depender de Add-PrinterPort do Win8+)
 function New-TCPIPPrinterPortSafe {
-    param(
-        [string]$IPAddress,
-        [int]$PortNumber = 9100,
-        [string]$Protocol = "RAW", # RAW ou LPR
-        [string]$QueueName = "lp"
-    )
-
-    $portName = "IP_$IPAddress"
-    Write-AppLog -Message "Verificando/Criando porta TCP/IP: $portName (IP: $IPAddress, Porta: $PortNumber, Proto: $Protocol)" -Level "INFO"
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Seria criada a porta TCP/IP $portName" -Level "SIMULACAO"
-        return @{ Success = $true; PortName = $portName }
-    }
-
-    try {
-        # Verificar se a porta já existe
-        $existing = Get-WmiObject -Class Win32_TCPIPPrinterPort -Filter "Name = '$portName'" -ErrorAction SilentlyContinue
-        if ($existing) {
-            Write-AppLog -Message "Porta TCP/IP $portName já existe no sistema." -Level "INFO"
-            return @{ Success = $true; PortName = $portName }
-        }
-
-        # Criar nova instância via classe WMI Win32_TCPIPPrinterPort
-        $portClass = [wmiclass]"\\.\root\cimv2:Win32_TCPIPPrinterPort"
-        $newPort = $portClass.CreateInstance()
-        $newPort.Name = $portName
-        $newPort.Protocol = if ($Protocol -eq "LPR") { 2 } else { 1 }
-        $newPort.HostAddress = $IPAddress
-        $newPort.PortNumber = [int]$PortNumber
-        $newPort.SNMPEnabled = $false
-        if ($Protocol -eq "LPR") {
-            $newPort.Queue = $QueueName
-        }
-        $newPort.Put() | Out-Null
-
-        Write-AppLog -Message "Porta TCP/IP $portName criada com sucesso via WMI." -Level "SUCESSO"
-        return @{ Success = $true; PortName = $portName }
-    } catch {
-        Write-AppLog -Message "Falha ao criar porta TCP/IP via WMI: $($_.Exception.Message)" -Level "ERRO"
-        return @{ Success = $false; Message = $_.Exception.Message }
-    }
+ param([string]$IPAddress,[int]$PortNumber=9100,[string]$Protocol='RAW',[string]$QueueName='lp')
+ return (Invoke-PrinterSupportOperation @{Action='TcpPort';IPAddress=$IPAddress;PortNumber=$PortNumber;Protocol=$Protocol;LprQueue=$QueueName})
 }
 
 # Instalar Impressora Local (Porta TCP/IP ou USB) utilizando driver existente
 function Install-LocalPrinterSafe {
-    param(
-        [string]$PrinterName,
-        [string]$PortName,
-        [string]$DriverName
-    )
-
-    Write-AppLog -Message "Instalando impressora local '$PrinterName' usando porta '$PortName' e driver '$DriverName'" -Level "INFO"
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Seria instalada a impressora '$PrinterName'" -Level "SIMULACAO"
-        return @{ Success = $true; Message = "Simulação de instalação bem-sucedida." }
-    }
-
-    # Usar PrintUIEntry /if /b "Nome" /f "" /r "Porta" /m "Driver"
-    $args = "/if /b `"$PrinterName`" /f `"`" /r `"$PortName`" /m `"$DriverName`""
-    $exitCode = Invoke-PrintUICommand -Arguments $args
-
-    if ($exitCode -eq 0) {
-        Write-AppLog -Message "Impressora '$PrinterName' instalada com sucesso." -Level "SUCESSO"
-        return @{ Success = $true; Message = "Impressora instalada com sucesso." }
-    } else {
-        $msgErro = Traduzir-ErroImpressao -ExitCode $exitCode
-        Write-AppLog -Message "Falha ao instalar impressora ($exitCode): $msgErro" -Level "ERRO"
-        return @{ Success = $false; Message = $msgErro; Code = $exitCode }
-    }
+ param([string]$PrinterName,[string]$PortName,[string]$DriverName)
+ return (Invoke-PrinterSupportOperation @{Action='LocalPrinter';QueueName=$PrinterName;PortName=$PortName;DriverName=$DriverName})
 }
 
 # Tradução dos códigos de erro mais frequentes de impressão no Windows
@@ -1444,112 +1401,18 @@ function Traduzir-ErroImpressao {
 
 # Reiniciar serviço Spooler com validação de status
 function Restart-SpoolerServiceSafe {
-    Write-AppLog -Message "Iniciando procedimento de reinício do Spooler de Impressão..." -Level "INFO"
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Seria reiniciado o serviço Spooler (sc stop / sc start)" -Level "SIMULACAO"
-        return $true
-    }
-
-    try {
-        # 1. Parar serviço
-        Start-Process -FilePath "sc.exe" -ArgumentList "stop spooler" -Wait -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-
-        # 2. Configurar inicialização automática
-        Start-Process -FilePath "sc.exe" -ArgumentList "config spooler start= auto" -Wait -WindowStyle Hidden
-
-        # 3. Iniciar serviço
-        Start-Process -FilePath "sc.exe" -ArgumentList "start spooler" -Wait -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-
-        # 4. Validar se está ativo
-        $svc = Get-Service -Name "spooler" -ErrorAction SilentlyContinue
-        if ($svc -and $svc.Status -eq [System.ServiceProcess.ServiceControllerStatus]::Running) {
-            Write-AppLog -Message "Serviço Spooler reiniciado e em execução normal." -Level "SUCESSO"
-            return $true
-        } else {
-            Write-AppLog -Message "Spooler não iniciou. Verifique dependências (HTTP, RPCSS)." -Level "AVISO"
-            return $false
-        }
-    } catch {
-        Write-AppLog -Message "Falha ao reiniciar Spooler: $($_.Exception.Message)" -Level "ERRO"
-        return $false
-    }
+ $r=Invoke-PrinterSupportOperation @{Action='Maintenance';Actions=@('Restart')};Write-AppLog -Message $r.Message -Level $(if($r.Success){'SUCESSO'}else{'ERRO'});return [bool]$r.Success
 }
 
 # Limpar com segurança estritamente os arquivos *.SPL e *.SHD da pasta spool
 function Clear-SpoolFilesSafe {
-    Write-AppLog -Message "Iniciando limpeza de arquivos travados no Spooler..." -Level "INFO"
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Seriam apagados arquivos *.SHD e *.SPL de System32\spool\PRINTERS" -Level "SIMULACAO"
-        return $true
-    }
-
-    try {
-        # Parar Spooler antes de apagar arquivos
-        Start-Process -FilePath "sc.exe" -ArgumentList "stop spooler" -Wait -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-
-        $spoolFolder = Join-Path -Path $env:SystemRoot -ChildPath "System32\spool\PRINTERS"
-        if (Test-Path -Path $spoolFolder) {
-            $filesRemoved = 0
-            $items = Get-ChildItem -Path $spoolFolder -Include *.spl, *.shd -Recurse -Force -ErrorAction SilentlyContinue
-            foreach ($item in $items) {
-                try {
-                    Remove-Item -Path $item.FullName -Force -ErrorAction SilentlyContinue
-                    $filesRemoved++
-                } catch {}
-            }
-            Write-AppLog -Message "Total de arquivos de fila purgados: $filesRemoved" -Level "SUCESSO"
-        }
-
-        # Reiniciar Spooler
-        Start-Process -FilePath "sc.exe" -ArgumentList "start spooler" -Wait -WindowStyle Hidden
-        Start-Sleep -Seconds 2
-
-        return $true
-    } catch {
-        Write-AppLog -Message "Erro durante a limpeza de arquivos de spool: $($_.Exception.Message)" -Level "ERRO"
-        return $false
-    }
+ $r=Invoke-PrinterSupportOperation @{Action='Maintenance';Actions=@('Purge')};Write-AppLog -Message $r.Message -Level $(if($r.Success){'SUCESSO'}else{'ERRO'});return [bool]$r.Success
 }
 
 # Remover flags de Pausa e Modo Offline de todas as impressoras
 function Reset-PrintersStateSafe {
-    Write-AppLog -Message "Removendo estados 'Pausada' e 'Trabalhar Offline' das impressoras..." -Level "INFO"
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Seriam redefinidos atributos Paused e WorkOffline via WMI" -Level "SIMULACAO"
-        return $true
-    }
-
-    try {
-        $printers = Get-WmiObject -Class Win32_Printer -ErrorAction SilentlyContinue
-        foreach ($p in $printers) {
-            $changed = $false
-            if ($p.Paused) {
-                try {
-                    $p.Resume() | Out-Null
-                    $changed = $true
-                    Write-AppLog -Message "Impressora '$($p.Name)': Pausa removida." -Level "INFO"
-                } catch {}
-            }
-            if ($p.WorkOffline) {
-                try {
-                    $p.WorkOffline = $false
-                    $p.Put() | Out-Null
-                    $changed = $true
-                    Write-AppLog -Message "Impressora '$($p.Name)': Modo Offline desativado." -Level "INFO"
-                } catch {}
-            }
-        }
-        return $true
-    } catch {
-        Write-AppLog -Message "Erro ao redefinir estados de impressoras: $($_.Exception.Message)" -Level "ERRO"
-        return $false
-    }
+ param([bool]$Unpause=$true,[bool]$ClearOffline=$true,[string]$QueueName='')
+ $r=Invoke-PrinterSupportOperation @{Action='ResetState';QueueName=$QueueName;Unpause=$Unpause;ClearOffline=$ClearOffline};return [bool]$r.Success
 }
 
 # ------------------------------------------------------------------------------
@@ -1558,7 +1421,7 @@ function Reset-PrintersStateSafe {
 
 $form = [System.Windows.Forms.Form]::new()
 $form.SuspendLayout()
-$form.Text = "Arrumar Impressora VG [v1.10.9]"
+$form.Text = "Arrumar Impressora VG [v1.11.0]"
 $form.Size = [System.Drawing.Size]::new(990, 680)
 $form.MinimumSize = [System.Drawing.Size]::new(900, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
@@ -2565,28 +2428,9 @@ $btnOpenProps.Add_Click({
 
 # Ação: Imprimir Teste (Oficial do Windows com confirmação)
 $btnPrintTest.Add_Click({
-    if ($dgvPrinters.SelectedRows.Count -eq 0) { return }
-    $selectedName = $dgvPrinters.SelectedRows[0].Cells["Name"].Value
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Página de teste seria enviada para '$selectedName'." -Level "SIMULACAO"
-        [System.Windows.Forms.MessageBox]::Show("[MODO SIMULAÇÃO] Nenhuma página de teste foi enviada.", "Simulação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        return
-    }
-    $resp = [System.Windows.Forms.MessageBox]::Show("Deseja enviar uma página de teste padrão do Windows para a impressora:`n`n$selectedName?", "Confirmar Impressão de Teste", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-    if ($resp -eq [System.Windows.Forms.DialogResult]::Yes) {
-        try {
-            Show-LoadingIndicator -Message "Enviando página de teste para $selectedName..." -Button $btnPrintTest
-            $ret = Invoke-PrintUICommand -Arguments "/k /n `"$selectedName`""
-            if ($ret -eq 0) {
-                [System.Windows.Forms.MessageBox]::Show("Página de teste enviada com sucesso para a fila.", "Sucesso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-                Write-AppLog -Message "Página de teste enviada para '$selectedName'." -Level "SUCESSO"
-            } else {
-                [System.Windows.Forms.MessageBox]::Show("Falha ao enviar página de teste (Código $ret).", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-            }
-        } finally {
-            Hide-LoadingIndicator -Button $btnPrintTest -SuccessMessage "Página de teste enviada."
-        }
-    }
+ if(-not $dgvPrinters.SelectedRows.Count){return};$name=[string]$dgvPrinters.SelectedRows[0].Cells['Name'].Value
+ if(-not $global:SimulationMode -and [Windows.Forms.MessageBox]::Show($form,"Enviar uma página de teste para '$name'?",'Teste de impressão','YesNo','Question') -ne 'Yes'){return}
+ try{Show-LoadingIndicator "Enviando teste para $name..." -Button $btnPrintTest;[void](Invoke-TrackedPrinterTest -QueueName $name -ShowResult)}finally{Hide-LoadingIndicator -Button $btnPrintTest}
 })
 
 # Ação: Teste Térmico RAW com Proteção de Segurança
@@ -2670,13 +2514,13 @@ $btnThermalTest.Add_Click({
         switch ($selectedIdx) {
             0 {
                 $langName = "ESC/POS"
-                $payload = "`e@`ea`x01TESTE SUPORTE TECNICO`n" +
+                $payload = "$([char]27)@$([char]27)a$([char]1)TESTE SUPORTE TECNICO`n" +
                            "ASSISTENTE DE IMPRESSORAS`n" +
                            "--------------------------------`n" +
                            "Host: $env:COMPUTERNAME`n" +
                            "Data: $((Get-Date).ToString('dd/MM/yyyy HH:mm:ss'))`n" +
                            "Impressora: $pName`n" +
-                           "Status: OK - Teste Concluido`n`n`n`n`n`em"
+                           "Documento de teste - confirmar resultado no papel`n`n`n`n`n$([char]27)m"
             }
             1 {
                 $langName = "PPLB"
@@ -2703,55 +2547,7 @@ $btnThermalTest.Add_Click({
             return
         }
 
-        $sent = $false
-        if ($ip -and ($ip -match "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")) {
-            try {
-                $sock = New-Object System.Net.Sockets.TcpClient
-                $ar = $sock.BeginConnect($ip, 9100, $null, $null)
-                if ($ar.AsyncWaitHandle.WaitOne(2000, $false)) {
-                    $sock.EndConnect($ar)
-                    $stream = $sock.GetStream()
-                    $bytes = [System.Text.Encoding]::GetEncoding("ISO-8859-1").GetBytes($payload)
-                    $stream.Write($bytes, 0, $bytes.Length)
-                    $stream.Flush()
-                    $sock.Close()
-                    $sent = $true
-                    Write-AppLog -Message "Comando RAW transmitido com sucesso via socket TCP para $($ip):9100." -Level "SUCESSO"
-                }
-            } catch {
-                Write-AppLog -Message "Falha ao enviar RAW via socket TCP: $($_.Exception.Message)" -Level "AVISO"
-            }
-        }
-
-        if (-not $sent) {
-            try {
-                $tmpFile = Join-Path -Path $env:TEMP -ChildPath ("raw_test_" + [Guid]::NewGuid().ToString("N") + ".prn")
-                [System.IO.File]::WriteAllText($tmpFile, $payload, [System.Text.Encoding]::GetEncoding("ISO-8859-1"))
-                [void]$global:TempFilesCreated.Add($tmpFile)
-
-                if ($pName -match "^\\\\") {
-                    Start-Process -FilePath "cmd.exe" -ArgumentList "/c copy /b `"$tmpFile`" `"$pName`"" -Wait -WindowStyle Hidden
-                    $sent = $true
-                } else {
-                    if ($port -match "^(LPT|COM)") {
-                        Start-Process -FilePath "cmd.exe" -ArgumentList "/c copy /b `"$tmpFile`" $port" -Wait -WindowStyle Hidden
-                        $sent = $true
-                    } else {
-                        Invoke-PrintUICommand -Arguments "/k /n `"$pName`"" | Out-Null
-                        $sent = $true
-                    }
-                }
-                Write-AppLog -Message "Comando RAW despachado para a impressora '$pName'." -Level "SUCESSO"
-            } catch {
-                Write-AppLog -Message "Falha ao despachar arquivo RAW: $($_.Exception.Message)" -Level "ERRO"
-            }
-        }
-
-        if ($sent) {
-            [System.Windows.Forms.MessageBox]::Show("Comando de teste RAW ($langName) despachado para a impressora '$pName'.", "Sucesso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        } else {
-            [System.Windows.Forms.MessageBox]::Show("Não foi possível entregar o comando RAW. Verifique conexão e status da porta.", "Aviso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        }
+        [void](Invoke-TrackedPrinterTest -QueueName $pName -RawPayload $payload -ShowResult)
     } finally {
         Hide-LoadingIndicator -Button $btnSend -SuccessMessage "Teste térmico processado."
     }
@@ -2763,29 +2559,8 @@ $btnThermalTest.Add_Click({
 
 # Ação: Corrigir / Despausar / Tirar Offline
 $btnFixPrinter.Add_Click({
-    if ($dgvPrinters.SelectedRows.Count -eq 0) { return }
-    $selectedName = $dgvPrinters.SelectedRows[0].Cells["Name"].Value
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Corrigindo status da impressora $selectedName (Pausa e Offline)" -Level "SIMULACAO"
-        [System.Windows.Forms.MessageBox]::Show("[MODO SIMULAÇÃO]`n`nSeriam removidos os estados de Pausa e Modo Offline de:`n$selectedName", "Simulação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        return
-    }
-
-    try {
-        $escaped = $selectedName.Replace("\", "\\").Replace("'", "''")
-        $p = Get-WmiObject -Query "SELECT * FROM Win32_Printer WHERE Name = '$escaped'"
-        if ($p) {
-            if ($p.Paused) { $p.Resume() | Out-Null }
-            if ($p.WorkOffline) { $p.WorkOffline = $false; $p.Put() | Out-Null }
-            Write-AppLog -Message "Impressora '$selectedName' corrigida (despausada e online)." -Level "SUCESSO"
-            [System.Windows.Forms.MessageBox]::Show("Estados de Pausa e Offline corrigidos para '$selectedName'.", "Sucesso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            Refresh-PrintersGrid
-        }
-    } catch {
-        Write-AppLog -Message "Erro ao corrigir impressora: $($_.Exception.Message)" -Level "ERRO"
-        [System.Windows.Forms.MessageBox]::Show("Erro ao tentar corrigir impressora: $($_.Exception.Message)", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    }
+ if(-not $dgvPrinters.SelectedRows.Count){return};$name=[string]$dgvPrinters.SelectedRows[0].Cells['Name'].Value
+ try{Show-LoadingIndicator 'Verificando pausa e offline...' -Button $btnFixPrinter;$r=Invoke-PrinterSupportOperation @{Action='ResetState';QueueName=$name;Unpause=$true;ClearOffline=$true};Show-PrinterSupportDetails 'Estados da impressora selecionada' (Format-PrinterSupportSummary $r);Refresh-PrintersGrid}finally{Hide-LoadingIndicator -Button $btnFixPrinter}
 })
 
 # Ação: Remover Conexão com Confirmação Segura
@@ -3957,7 +3732,8 @@ $btnLocalPortSelected.Add_Click({
     if (-not $localResult -or -not $localResult.Success) { return }
     $localName = [string]$localResult.ConnectedUNC
     if ($chkNetDefault.Checked) { Set-DefaultPrinterSafe -PrinterName $localName | Out-Null }
-    if ($chkNetTestPage.Checked -and -not $localResult.JobValidated) { Invoke-PrintUICommand -Arguments ('/k /n "' + $localName + '"') | Out-Null }
+    if ($chkNetTestPage.Checked -and -not $localResult.JobValidationAttempted) { [void](Invoke-TrackedPrinterTest -QueueName $localName -ShowResult) }
+    elseif($localResult.JobValidationAttempted){Show-PrinterTestObservation -QueueName $localName -Result $localResult}
     Refresh-PrintersGrid
     $selectedRow.Cells['Status'].Value = 'Ja Instalada no Sistema'
     $selectedRow.DefaultCellStyle.ForeColor = [System.Drawing.Color]::Gray
@@ -4101,6 +3877,7 @@ $btnConnectSelected.Add_Click({
         if ($script:authenticatedPrinterServer -ieq $serverForConnection -and $script:authenticatedPrinterUser) {
             $txtNetUser.Text = $script:authenticatedPrinterUser
         }
+        if($result.JobValidationAttempted){Show-PrinterTestObservation -QueueName $(if($result.ConnectedUNC){$result.ConnectedUNC}else{$unc}) -Result $result}
         $fallbackHandled = $false
         if (-not $result.Cascaded -and -not $result.Success -and -not $result.Simulated -and $result.Code -notin @(53,1223,1801) -and $script:currentWindowsBuild -lt 22000) {
             $btnCancelConnection.Visible = $false
@@ -4120,7 +3897,7 @@ $btnConnectSelected.Add_Click({
             Set-DefaultPrinterSafe -PrinterName $connectedUNC | Out-Null
         }
         if ($chkNetTestPage.Checked -and -not $result.JobValidationAttempted -and -not $result.JobValidated) {
-            Invoke-PrintUICommand -Arguments ('/k /n "' + $connectedUNC + '"') | Out-Null
+            [void](Invoke-TrackedPrinterTest -QueueName $connectedUNC -ShowResult)
         }
 
         # Atualizar tabelas
@@ -4329,7 +4106,8 @@ $btnManualConnect.Add_Click({
         if ($res.Success) {
             $connectedUNC = if ($res.ConnectedUNC) { [string]$res.ConnectedUNC } else { $unc }
             if ($chkManualDefault.Checked) { Set-DefaultPrinterSafe -PrinterName $connectedUNC | Out-Null }
-            if ($chkManualTest.Checked -and -not $res.JobValidationAttempted -and -not $res.JobValidated) { Invoke-PrintUICommand -Arguments ('/k /n "' + $connectedUNC + '"') | Out-Null }
+            if ($chkManualTest.Checked -and -not $res.JobValidationAttempted -and -not $res.JobValidated) { [void](Invoke-TrackedPrinterTest -QueueName $connectedUNC -ShowResult) }
+            elseif($res.JobValidationAttempted){Show-PrinterTestObservation -QueueName $connectedUNC -Result $res}
             Refresh-PrintersGrid
             Update-StatusStrip -Text "Impressora $connectedUNC conectada." -Color [System.Drawing.Color]::DarkGreen
             $successMessage = if ($res.LocalPort) {
@@ -4500,116 +4278,38 @@ $btnInstallIPPrinter.Font = [System.Drawing.Font]::new("Segoe UI", 10, [System.D
 $pnlIP.Controls.Add($btnInstallIPPrinter)
 
 function Populate-DriversList {
-    $cmbDrivers.Items.Clear()
-    $drivers = Get-InstalledDriversSafe
-    foreach ($d in $drivers) {
-        [void]$cmbDrivers.Items.Add($d)
-    }
-    # Tentar selecionar driver genérico de texto ou primeiro da lista
-    $generic = $drivers | Where-Object { $_ -match "(?i)(generic|genérico|text only|apenas texto)" } | Select-Object -First 1
-    if ($generic) {
-        $cmbDrivers.SelectedItem = $generic
-    } elseif ($cmbDrivers.Items.Count -gt 0) {
-        $cmbDrivers.SelectedIndex = 0
-    }
+ $previous=[string]$cmbDrivers.SelectedItem;$cmbDrivers.Items.Clear()
+ foreach($driver in @(Get-InstalledDriversSafe)){[void]$cmbDrivers.Items.Add($driver)}
+ $cmbDrivers.SelectedIndex=-1
+ if($previous -and $cmbDrivers.Items.Contains($previous)){$cmbDrivers.SelectedItem=$previous}
 }
 $btnRefreshDrivers.Add_Click({ Populate-DriversList })
 
 # Testar IP e Porta TCP
 $btnTestIPPort.Add_Click({
-    $ip = $txtIPAddr.Text.Trim()
-    $port = 9100
-    [int]::TryParse($txtPortNum.Text.Trim(), [ref]$port) | Out-Null
-
-    if ($ip -notmatch "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") {
-        [System.Windows.Forms.MessageBox]::Show("Endereço IPv4 inválido.", "Aviso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        return
-    }
-
-    try {
-        Show-LoadingIndicator -Message "Testando $ip na porta TCP $port..." -Button $btnTestIPPort
-
-        $ping = Test-HostPingSafe -HostOrIp $ip -TimeoutMs 1500
-        $tcp = Test-TcpPortSafe -HostOrIp $ip -Port $port -TimeoutMs 2000
-
-        $msg = "Teste de Conectividade com a Impressora:`n`n" +
-               "- Endereço: $ip`n" +
-               "- Resposta de Ping: $(if ($ping) { 'OK' } else { 'Sem resposta ICMP' })`n" +
-               "- Porta TCP $($port): $(if ($tcp) { 'ABERTA E RESPONDENDO' } else { 'FECHADA OU BLOQUEADA' })`n`n"
-
-        if ($tcp) {
-            $msg += "A impressora está online e recebendo conexões nesta porta."
-            [System.Windows.Forms.MessageBox]::Show($msg, "Comunicação Confirmada", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            Update-StatusStrip -Text "Impressora $ip comunicando na porta $port." -Color [System.Drawing.Color]::DarkGreen
-        } else {
-            $msg += "ATENÇÃO: A porta TCP $port não respondeu. Verifique se a impressora está ligada, conectada à rede e com o IP correto configurado."
-            [System.Windows.Forms.MessageBox]::Show($msg, "Falha de Conexão", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            Update-StatusStrip -Text "Falha na porta TCP $port de $ip." -Color [System.Drawing.Color]::DarkRed
-        }
-    } finally {
-        Hide-LoadingIndicator -Button $btnTestIPPort
-    }
+ Initialize-PrinterSupportFunctions;$ip=$txtIPAddr.Text.Trim();$port=0
+ if(-not(Test-PrinterIPv4 $ip) -or -not [int]::TryParse($txtPortNum.Text.Trim(),[ref]$port) -or $port -lt 1 -or $port -gt 65535){[Windows.Forms.MessageBox]::Show($form,'Informe IPv4 e porta TCP válidos.','Verificar endereço')|Out-Null;return}
+ try{Show-LoadingIndicator "Testando $ip na porta $port..." -Button $btnTestIPPort;$tcp=Test-TcpPortSafe $ip $port 2000
+  [Windows.Forms.MessageBox]::Show($form,"Endereço: $ip`nPorta TCP: $port`nResposta: $(if($tcp){'aberta'}else{'sem resposta'})`n`nUma porta aberta confirma um serviço TCP. Não identifica sozinha uma impressora nem confirma impressão.",'Teste do serviço TCP')|Out-Null
+ }finally{Hide-LoadingIndicator -Button $btnTestIPPort}
 })
 
 # Instalar Impressora TCP/IP
 $btnInstallIPPrinter.Add_Click({
-    $ip = $txtIPAddr.Text.Trim()
-    $pName = $txtIPPrinterName.Text.Trim()
-    $driver = [string]$cmbDrivers.SelectedItem
-
-    if ($ip -notmatch "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") {
-        [System.Windows.Forms.MessageBox]::Show("Informe um endereço IPv4 válido.", "Aviso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        return
-    }
-    if (-not $pName) {
-        [System.Windows.Forms.MessageBox]::Show("Informe um nome para a impressora.", "Aviso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        return
-    }
-    if (-not $driver) {
-        [System.Windows.Forms.MessageBox]::Show("Selecione um driver homologado na lista.", "Aviso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        return
-    }
-
-    $portNum = 9100
-    [int]::TryParse($txtPortNum.Text.Trim(), [ref]$portNum) | Out-Null
-    $proto = if ($rbProtoLPR.Checked) { "LPR" } else { "RAW" }
-    $queue = $txtQueueName.Text.Trim()
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Impressora '$pName' seria instalada em $ip porta $portNum ($proto), usando '$driver'." -Level "SIMULACAO"
-        [System.Windows.Forms.MessageBox]::Show("[MODO SIMULAÇÃO] Nenhuma porta ou impressora foi criada.`n`nImpressora: $pName`nEndereço: $ip`nDriver: $driver", "Simulação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        return
-    }
-
-    try {
-        Show-LoadingIndicator -Message "Criando porta e registrando impressora..." -Button $btnInstallIPPrinter
-
-        # 1. Criar Porta TCP/IP nativa
-        $portResult = New-TCPIPPrinterPortSafe -IPAddress $ip -PortNumber $portNum -Protocol $proto -QueueName $queue
-        if (-not $portResult.Success) {
-            [System.Windows.Forms.MessageBox]::Show("Falha ao criar a porta TCP/IP:`n$($portResult.Message)", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-            return
-        }
-
-        $portName = $portResult.PortName
-
-        # 2. Instalar impressora usando PrintUIEntry
-        $installRes = Install-LocalPrinterSafe -PrinterName $pName -PortName $portName -DriverName $driver
-        if ($installRes.Success) {
-            if ($chkIPDefault.Checked) { Set-DefaultPrinterSafe -PrinterName $pName | Out-Null }
-            if ($chkIPTest.Checked) { Invoke-PrintUICommand -Arguments "/k /n `"$pName`"" | Out-Null }
-            Refresh-PrintersGrid
-            Update-StatusStrip -Text "Impressora '$pName' instalada com sucesso." -Color [System.Drawing.Color]::DarkGreen
-
-            $resp = [System.Windows.Forms.MessageBox]::Show("Impressora TCP/IP '$pName' instalada com sucesso!`n`nDeseja abrir a fila de impressão agora?", "Sucesso", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information)
-            if ($resp -eq [System.Windows.Forms.DialogResult]::Yes) {
-                Invoke-PrintUICommand -Arguments "/o /n `"$pName`"" -NoWait | Out-Null
-            }
-        } else {
-            [System.Windows.Forms.MessageBox]::Show("Falha ao registrar a impressora:`n$($installRes.Message)", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-        }
-    } finally {
-        Hide-LoadingIndicator -Button $btnInstallIPPrinter
-    }
+ Initialize-PrinterSupportFunctions;$ip=$txtIPAddr.Text.Trim();$port=0;$name=$txtIPPrinterName.Text.Trim();$driver=[string]$cmbDrivers.SelectedItem
+ if(-not(Test-PrinterIPv4 $ip) -or -not [int]::TryParse($txtPortNum.Text.Trim(),[ref]$port) -or $port -lt 1 -or $port -gt 65535 -or -not $name -or -not $driver){[Windows.Forms.MessageBox]::Show($form,'Informe IPv4/porta válidos, nome da fila e selecione o driver correto.','Instalação TCP/IP')|Out-Null;return}
+ $protocol=if($rbProtoLPR.Checked){'LPR'}else{'RAW'}
+ $knownHosts=@($dgvNetPrinters.Rows|Where-Object {$_.Cells['UNC'].Value -match '^\\\\' -and (([string]$_.Cells['Server'].Value -match ('(?<![\d.])'+[regex]::Escape($ip)+'(?![\d.])')) -or ([string]$_.Cells['UNC'].Value).StartsWith('\\'+$ip+'\',[StringComparison]::OrdinalIgnoreCase))})
+ if($knownHosts.Count -and -not $global:SimulationMode){
+  if([Windows.Forms.MessageBox]::Show($form,"O endereço $ip aparece na lista como um computador com impressoras compartilhadas.`n`nPara uma impressora USB conectada nesse computador, use o compartilhamento na aba Impressoras da Rede.`n`nContinuar por TCP/IP somente se esse endereço oferecer um serviço de impressão $protocol na porta $port?",'Confirmar destino TCP/IP','YesNo','Question','Button2') -ne 'Yes'){return}
+ }
+ if($global:SimulationMode){Show-PrinterSupportDetails 'Simulação TCP/IP' "Seria instalada '$name' em $ip, protocolo $protocol, porta $port, driver '$driver'. Nenhuma alteração executada.";return}
+ try{Show-LoadingIndicator 'Criando porta e confirmando a fila...' -Button $btnInstallIPPrinter
+  $p=New-TCPIPPrinterPortSafe -IPAddress $ip -PortNumber $port -Protocol $protocol -QueueName $txtQueueName.Text.Trim();if(-not $p.Success){throw $p.Message}
+  $r=Install-LocalPrinterSafe -PrinterName $name -PortName $p.PortName -DriverName $driver;if(-not $r.Success){throw $r.Message}
+  if($chkIPDefault.Checked){Set-DefaultPrinterSafe $name|Out-Null};Refresh-PrintersGrid;Show-PrinterSupportDetails 'Instalação TCP/IP confirmada' (Format-PrinterSupportSummary $r)
+  if($chkIPTest.Checked){[void](Invoke-TrackedPrinterTest -QueueName $name -ShowResult)}
+ }catch{Show-PrinterSupportDetails 'Falha na instalação TCP/IP' $_.Exception.Message}finally{Hide-LoadingIndicator -Button $btnInstallIPPrinter}
 })
 
 # ==============================================================================
@@ -4711,112 +4411,41 @@ $btnQuickPurge.ForeColor = [System.Drawing.Color]::DarkRed
 $pnlFixChecklist.Controls.Add($btnQuickPurge)
 
 function Update-SpoolTabStatus {
-    $svc = Get-Service -Name "spooler" -ErrorAction SilentlyContinue
-    $wmiSvc = Get-WmiObject -Class Win32_Service -Filter "Name = 'Spooler'" -ErrorAction SilentlyContinue
-
-    $spoolPath = Join-Path -Path $env:SystemRoot -ChildPath "System32\spool\PRINTERS"
-    $fileCount = 0
-    if (Test-Path -Path $spoolPath) {
-        $f = Get-ChildItem -Path $spoolPath -Include *.spl, *.shd -Recurse -Force -ErrorAction SilentlyContinue
-        if ($f) { $fileCount = $f.Count }
-    }
-
-    $statusStr = if ($svc) { $svc.Status.ToString() } else { "Indefinido" }
-    $startMode = if ($wmiSvc) { $wmiSvc.StartMode } else { "Desconhecido" }
-
-    $lblSpoolInfo.Text = "Serviço Spooler: $statusStr | Inicialização: $startMode | Arquivos na pasta PRINTERS: $fileCount"
-    if ($statusStr -eq "Running") {
-        $lblSpoolInfo.ForeColor = [System.Drawing.Color]::DarkGreen
-    } else {
-        $lblSpoolInfo.ForeColor = [System.Drawing.Color]::DarkRed
-    }
-
-    # Atualizar lista de jobs
-    $dgvQueue.Rows.Clear()
-    $jobs = Get-PrintJobsSafe
-    foreach ($j in $jobs) {
-        $pName = ($j.Name -split ",")[0]
-        $sizeKB = [math]::Round($j.TotalPages, 0)
-        [void]$dgvQueue.Rows.Add($j.JobId, $pName, $j.Document, $j.Owner, "$($j.Size) bytes", $j.TimeSubmitted, $j.JobStatus)
-    }
+ $svc=Get-Service Spooler -ErrorAction SilentlyContinue
+ $state=Get-CimInstance Win32_Service -Filter "Name='Spooler'" -OperationTimeoutSec 3 -ErrorAction SilentlyContinue
+ $lblSpoolInfo.Text="Spooler: $($svc.Status) | Inicialização: $($state.StartMode)"
+ $lblSpoolInfo.ForeColor=if($svc.Status -eq 'Running'){[Drawing.Color]::DarkGreen}else{[Drawing.Color]::DarkRed}
+ $previous=if($script:cmbSupportQueue){[string]$script:cmbSupportQueue.SelectedItem}else{''}
+ $dgvQueue.Rows.Clear()
+ foreach($job in @(Get-PrintJobsSafe)){
+  $queue=([string]$job.Name -replace ',\s*\d+$','')
+  [void]$dgvQueue.Rows.Add($job.JobId,$queue,$job.Document,$job.Owner,"$($job.Size) bytes",$job.TimeSubmitted,$job.JobStatus)
+ }
+ if($script:cmbSupportQueue){$script:cmbSupportQueue.Items.Clear();foreach($printer in @(Get-InstalledPrintersWmi|Sort-Object Name)){[void]$script:cmbSupportQueue.Items.Add([string]$printer.Name)}
+  if($previous -and $script:cmbSupportQueue.Items.Contains($previous)){$script:cmbSupportQueue.SelectedItem=$previous}elseif($dgvQueue.SelectedRows.Count){$script:cmbSupportQueue.SelectedItem=[string]$dgvQueue.SelectedRows[0].Cells['Printer'].Value}
+ }
 }
 
 $btnRefreshSpoolTab.Add_Click({ Update-SpoolTabStatus })
 
 # Ação: Executar Correções Selecionadas
 $btnExecuteFixes.Add_Click({
-    $actions = @()
-    if ($chkOptRestartSpooler.Checked) { $actions += "- Reiniciar o serviço Spooler" }
-    if ($chkOptAutoStart.Checked) { $actions += "- Configurar Spooler para inicialização Automática" }
-    if ($chkOptUnpause.Checked) { $actions += "- Remover estado Pausada de todas as impressoras" }
-    if ($chkOptClearOffline.Checked) { $actions += "- Remover modo Offline de todas as impressoras" }
-    if ($chkOptPurgeFiles.Checked) { $actions += "- LIMPAR e CANCELAR todos os documentos travados no spool" }
-
-    if ($actions.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("Selecione ao menos uma ação para executar.", "Aviso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        return
-    }
-
-    $msgConfirm = "As seguintes ações serão executadas no computador:`n`n" + ($actions -join "`n") + "`n`nDeseja prosseguir?"
-    $icon = if ($chkOptPurgeFiles.Checked) { [System.Windows.Forms.MessageBoxIcon]::Warning } else { [System.Windows.Forms.MessageBoxIcon]::Question }
-    $resp = [System.Windows.Forms.MessageBox]::Show($msgConfirm, "Confirmar Ações de Correção", [System.Windows.Forms.MessageBoxButtons]::YesNo, $icon)
-    if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-
-    if ($global:SimulationMode) {
-        Write-AppLog -Message "[SIMULAÇÃO] Correções de spooler e impressoras não foram executadas." -Level "SIMULACAO"
-        [System.Windows.Forms.MessageBox]::Show("[MODO SIMULAÇÃO] Nenhuma correção foi aplicada.", "Simulação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        return
-    }
-
-    try {
-        Show-LoadingIndicator -Message "Executando correções do spooler..." -Button $btnExecuteFixes
-
-        if ($chkOptPurgeFiles.Checked) {
-            Clear-SpoolFilesSafe | Out-Null
-        } elseif ($chkOptRestartSpooler.Checked) {
-            Restart-SpoolerServiceSafe | Out-Null
-        }
-
-        if ($chkOptAutoStart.Checked -and -not $global:SimulationMode) {
-            Start-Process -FilePath "sc.exe" -ArgumentList "config spooler start= auto" -Wait -WindowStyle Hidden
-        }
-
-        if ($chkOptUnpause.Checked -or $chkOptClearOffline.Checked) {
-            Reset-PrintersStateSafe | Out-Null
-        }
-
-        Update-SpoolTabStatus
-        Refresh-PrintersGrid
-        Update-StatusStrip -Text "Procedimento de correção concluído." -Color [System.Drawing.Color]::DarkGreen
-        [System.Windows.Forms.MessageBox]::Show("Procedimentos de correção executados com sucesso!", "Concluído", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-    } finally {
-        Hide-LoadingIndicator -Button $btnExecuteFixes
-    }
+ $actions=@();if($chkOptPurgeFiles.Checked){$actions+= 'Purge'}elseif($chkOptRestartSpooler.Checked){$actions+='Restart'}
+ if($chkOptAutoStart.Checked){$actions+='AutoStart'}
+ if($chkOptUnpause.Checked -or $chkOptClearOffline.Checked){$actions+='ResetState'}
+ if(-not $actions.Count){[Windows.Forms.MessageBox]::Show($form,'Selecione uma ação.','Manutenção')|Out-Null;return}
+ $scope=if($chkOptPurgeFiles.Checked){'A limpeza global cancela documentos de todas as impressoras.'}else{'As ações serão aplicadas neste computador; pausa/offline seguem as caixas selecionadas.'}
+ if(-not $global:SimulationMode -and [Windows.Forms.MessageBox]::Show($form,($scope+"`n`nAções: "+($actions -join ', ')),'Executar manutenção','YesNo','Question') -ne 'Yes'){return}
+ try{Show-LoadingIndicator 'Executando e verificando cada ação...' -Button $btnExecuteFixes;$r=Invoke-PrinterSupportOperation @{Action='Maintenance';Actions=$actions;Unpause=$chkOptUnpause.Checked;ClearOffline=$chkOptClearOffline.Checked} -TimeoutSeconds 70
+  Show-PrinterSupportDetails 'Resultado da manutenção' (Format-PrinterSupportSummary $r);Update-SpoolTabStatus;Refresh-PrintersGrid
+  Update-StatusStrip -Text $(if($r.Success){'Ações selecionadas verificadas.'}else{'Manutenção com falhas ou etapas inconclusivas. Veja o resultado.'}) -Color $(if($r.Success){'DarkGreen'}else{'DarkGoldenrod'})
+ }finally{Hide-LoadingIndicator -Button $btnExecuteFixes}
 })
 
 # Ação: Limpeza Imediata de Fila
 $btnQuickPurge.Add_Click({
-    $confirmMsg = "ATENÇÃO TÉCNICO:`n`n" +
-                  "Esta ação irá parar o Spooler, apagar TODOS os documentos presos na pasta de impressão e reiniciar o serviço.`n`n" +
-                  "Todos os trabalhos de impressão pendentes serão cancelados definitivamente.`n`n" +
-                  "Deseja prosseguir com a limpeza agora?"
-    $resp = [System.Windows.Forms.MessageBox]::Show($confirmMsg, "Confirmar Limpeza Total da Fila", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
-    if ($resp -eq [System.Windows.Forms.DialogResult]::Yes) {
-        if ($global:SimulationMode) {
-            Write-AppLog -Message "[SIMULAÇÃO] Fila e arquivos de spool não foram limpos." -Level "SIMULACAO"
-            [System.Windows.Forms.MessageBox]::Show("[MODO SIMULAÇÃO] Nenhum trabalho de impressão foi apagado.", "Simulação", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            return
-        }
-        try {
-            Show-LoadingIndicator -Message "Limpando fila e restabelecendo spooler..." -Button $btnQuickPurge
-            Clear-SpoolFilesSafe | Out-Null
-            Update-SpoolTabStatus
-            Refresh-PrintersGrid
-            [System.Windows.Forms.MessageBox]::Show("A pasta de spool foi limpa e o serviço foi restabelecido.", "Sucesso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        } finally {
-            Hide-LoadingIndicator -Button $btnQuickPurge
-        }
-    }
+ if(-not $global:SimulationMode -and [Windows.Forms.MessageBox]::Show($form,'Cancelar todos os documentos pendentes, parar o Spooler, limpar seus arquivos e iniciar o serviço? Para uma única impressora, use Limpar somente esta impressora.','Limpeza global','YesNo','Warning') -ne 'Yes'){return}
+ try{Show-LoadingIndicator 'Executando limpeza global verificada...' -Button $btnQuickPurge;$r=Invoke-PrinterSupportOperation @{Action='Maintenance';Actions=@('Purge')} -TimeoutSeconds 45;Show-PrinterSupportDetails 'Resultado da limpeza global' (Format-PrinterSupportSummary $r);Update-SpoolTabStatus;Refresh-PrintersGrid}finally{Hide-LoadingIndicator -Button $btnQuickPurge}
 })
 
 # ==============================================================================
@@ -5016,17 +4645,11 @@ $btnCopyLog.Add_Click({
 })
 
 $btnExportReport.Add_Click({
-    $sfd = [System.Windows.Forms.SaveFileDialog]::new()
-    $sfd.Filter = "Arquivos de Log (*.log;*.txt)|*.log;*.txt"
-    $sfd.FileName = "Relatorio_Atendimento_$($env:COMPUTERNAME)_$((Get-Date).ToString('yyyyMMdd')).txt"
-    if ($sfd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        try {
-            [System.IO.File]::WriteAllText($sfd.FileName, $script:txtLogViewer.Text)
-            [System.Windows.Forms.MessageBox]::Show("Relatório exportado com sucesso para:`n$($sfd.FileName)", "Sucesso", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show("Erro ao exportar arquivo: $($_.Exception.Message)", "Erro", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-        }
-    }
+ $picker=[Windows.Forms.SaveFileDialog]::new();$picker.Filter='Atendimento (*.zip)|*.zip';$picker.FileName='Atendimento_'+$env:COMPUTERNAME+'_'+(Get-Date -Format 'yyyyMMdd_HHmmss')+'.zip'
+ try{if($picker.ShowDialog($form) -ne 'OK'){return};Reload-LogViewer;Show-LoadingIndicator 'Reunindo log atual e diagnóstico...' -Button $btnExportReport
+  $r=Invoke-PrinterSupportOperation @{Action='Bundle';OutputPath=$picker.FileName;LogPath=$global:LogFilePath;RecordsDirectory=$script:supportDataDirectory;Since=$global:SessionStartTime.ToString('o')} -TimeoutSeconds 60
+  Show-PrinterSupportDetails 'Exportação do atendimento' $r.Message
+ }finally{Hide-LoadingIndicator -Button $btnExportReport;$picker.Dispose()}
 })
 
 $btnOpenLogsFolder.Add_Click({
@@ -5097,6 +4720,7 @@ if (Test-Path -LiteralPath $interfacePath) {
     . $interfacePath
     Set-PrinterAppLayout
 }
+Initialize-PrinterSupportToolsUI
 $form.ResumeLayout($true)
 
 $form.Add_Shown({

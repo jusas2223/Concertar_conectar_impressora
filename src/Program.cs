@@ -8,8 +8,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("Arrumar Impressora VG")]
 [assembly: AssemblyDescription("Diagnostico e configuracao de impressoras")]
 [assembly: AssemblyProduct("Arrumar Impressora VG")]
-[assembly: AssemblyVersion("1.10.9.0")]
-[assembly: AssemblyFileVersion("1.10.9.0")]
+[assembly: AssemblyVersion("1.11.0.0")]
+[assembly: AssemblyFileVersion("1.11.0.0")]
 
 namespace AssistenteImpressorasLauncher
 {
@@ -58,6 +58,8 @@ namespace AssistenteImpressorasLauncher
                 ExtractResource(ServerDriverResource, workDirectory, "DRIVER-DO-SERVIDOR.ps1");
                 ExtractResource("AssistenteImpressoras.IMPRESSAO-COMUM.ps1", workDirectory, "IMPRESSAO-COMUM.ps1");
                 ExtractResource(InterfaceResource, workDirectory, "INTERFACE.ps1");
+                ExtractResource("AssistenteImpressoras.ATENDIMENTO-COMUM.ps1", workDirectory, "ATENDIMENTO-COMUM.ps1");
+                ExtractResource("AssistenteImpressoras.ATENDIMENTO-INTERFACE.ps1", workDirectory, "ATENDIMENTO-INTERFACE.ps1");
                 string compatibilityDiagnosisPath = ExtractResource(CompatibilityDiagnosisResource, workDirectory, "Diagnostico_Compartilhamento.ps1");
 
                 string appDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
